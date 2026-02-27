@@ -28,12 +28,12 @@ pip install pyjpegxl
 
 ### Build from source
 
-Requires Rust toolchain and [maturin](https://github.com/PyO3/maturin):
+Requires Rust toolchain and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install maturin
-git clone https://github.com/user/pyjpegxl && cd pyjpegxl
-maturin build --release
+git clone https://github.com/twn39/pyjpegxl && cd pyjpegxl
+# Install dependencies and build extension in-place
+uv sync
 ```
 
 ## Quick Start

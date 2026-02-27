@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pyjpegxl"
-version = "0.2.0"
+version = "0.2.1"
 description = "Fastest Python bindings for zero-copy JPEG XL & JPEG encoding/decoding and lossless transcoding (static linked)"
 readme = "README.md"
 authors = [
@@ -33,9 +33,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/user/pyjpegxl"
-Repository = "https://github.com/user/pyjpegxl"
-Issues = "https://github.com/user/pyjpegxl/issues"
+Homepage = "https://github.com/twn39/pyjpegxl"
+Repository = "https://github.com/twn39/pyjpegxl"
+Issues = "https://github.com/twn39/pyjpegxl/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
