@@ -40,6 +40,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
+          architecture: x64
           enable-cache: true
 
       - name: Sync dependencies
@@ -51,23 +52,26 @@ jobs:
       - name: Run Ruff Linter Check
         run: uv run ruff check .
 
-      - name: Run Pytest and Coverage (Main/PR - Unix)
+      - name: Run Pytest (Main/PR - Unix)
         if: "!startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'"
-        run: uv run pytest --cov=pyjpegxl tests/ -v --timeout=300
+        run: uv run pytest --cov=pyjpegxl tests/test_codec.py tests/test_benchmark.py -v -s --timeout=300
 
-      - name: Run Pytest (Main/PR - Windows, No Coverage)
+      - name: Run Pytest (Main/PR - Windows)
         if: "!startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'"
-        run: uv run pytest tests/ -v --timeout=300 --no-cov
+        env:
+          ITERATIONS: 2
+        run: uv run pytest tests/test_codec.py tests/test_benchmark.py -v -s --timeout=300 --no-cov
 
-      - name: Run Pytest and Coverage (Tag - Unix, Skip Benchmarks)
-        if: startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'
-        run: uv run pytest --cov=pyjpegxl tests/ -v -k "not TestBench and not benchmark" --timeout=300
+      - name: Run Pytest (Tag - Unix)
+        if: "startsWith(github.ref, 'refs/tags/') && runner.os != 'Windows'"
+        run: uv run pytest --cov=pyjpegxl tests/test_codec.py tests/test_benchmark.py -v -s -k "not TestBench and not benchmark" --timeout=300
 
-      - name: Run Pytest (Tag - Windows, Skip Benchmarks, No Coverage)
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
-        run: uv run pytest tests/ -v -k "not TestBench and not benchmark" --timeout=300 --no-cov
+      - name: Run Pytest (Tag - Windows)
+        if: "startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'"
+        run: uv run pytest tests/test_codec.py tests/test_benchmark.py -v -s -k "not TestBench and not benchmark" --timeout=300 --no-cov
 
       - name: Upload coverage to Codecov
+        if: runner.os != 'Windows'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml

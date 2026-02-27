@@ -44,7 +44,7 @@ module-name = "pyjpegxl._pyjpegxl"
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --tb=short --cov=python/pyjpegxl --cov-report=term-missing --cov-report=xml"
+addopts = "-ra -q --tb=short"
 testpaths = [
     "tests",
 ]
