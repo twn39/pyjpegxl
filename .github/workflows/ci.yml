@@ -40,7 +40,6 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-          architecture: x64
           enable-cache: true
 
       - name: Sync dependencies
