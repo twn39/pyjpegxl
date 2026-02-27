@@ -9,6 +9,7 @@ description = "Fastest Python bindings for zero-copy JPEG XL & JPEG encoding/dec
 readme = "README.md"
 authors = [
     { name = "curry tang", email = "twn39@163.com" }
+]
 license = { text = "BSD-3-Clause" }
 requires-python = ">=3.11"
 dependencies = [
