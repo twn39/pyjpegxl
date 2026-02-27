@@ -233,6 +233,7 @@ class TestBenchPillowJxlRealImage:
     @pytest.fixture(autouse=True)
     def setup(self):
         import io
+
         import pillow_jxl  # noqa: F401
         from PIL import Image
 
