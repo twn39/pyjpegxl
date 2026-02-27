@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 from pyjpegxl._pyjpegxl import (
     JpegInfo,
     jpeg_decode,
-    jpeg_encode,
     jpeg_decode_to_numpy,
+    jpeg_encode,
     jpeg_encode_from_numpy,
 )
 
@@ -34,7 +34,7 @@ def jpeg_read(path: str | os.PathLike) -> tuple[JpegInfo, bytes]:
         return jpeg_decode(f.read())
 
 
-def jpeg_read_to_numpy(path: str | os.PathLike) -> tuple[JpegInfo, "np.ndarray"]:
+def jpeg_read_to_numpy(path: str | os.PathLike) -> tuple[JpegInfo, np.ndarray]:
     """Read a JPEG file and decode it to a NumPy array.
 
     Args:
@@ -78,7 +78,7 @@ def jpeg_write(
 
 def jpeg_write_from_numpy(
     path: str | os.PathLike,
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     quality: int = 95,
 ) -> int:

@@ -4,18 +4,84 @@ build-backend = "maturin"
 
 [project]
 name = "pyjpegxl"
-version = "0.1.0"
-description = "Python bindings for JPEG XL encoding/decoding (libjxl static linked)"
-requires-python = ">=3.9"
+version = "0.2.0"
+description = "Fastest Python bindings for zero-copy JPEG XL & JPEG encoding/decoding and lossless transcoding (static linked)"
+readme = "README.md"
+authors = [
+    { name = "curry tang", email = "twn39@163.com" }
+]
 license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.20.0",
+]
+keywords = ["jpegxl", "jxl", "jpeg", "image", "encoding", "decoding", "numpy", "zero-copy", "transcoding"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: 3",
-    "Topic :: Multimedia :: Graphics",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/user/pyjpegxl"
+Repository = "https://github.com/user/pyjpegxl"
+Issues = "https://github.com/user/pyjpegxl/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "pillow>=10.0.0",
+    "pytest-cov>=4.1.0",
+]
+dev = [
+    "maturin>=1.0",
+    "ruff>=0.1.0",
 ]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "pyjpegxl._pyjpegxl"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --tb=short --cov=python/pyjpegxl --cov-report=term-missing --cov-report=xml"
+testpaths = [
+    "tests",
+]
+asyncio_mode = "strict"
+
+[tool.coverage.run]
+source = ["python/pyjpegxl"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "pass",
+    "except ImportError:",
+]
+show_missing = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]

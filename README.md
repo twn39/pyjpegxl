@@ -2,8 +2,9 @@
 
 Python bindings for **JPEG XL** and **JPEG** encoding/decoding, powered by [libjxl](https://github.com/libjxl/libjxl) and [libjpeg-turbo](https://libjpeg-turbo.org/). Both libraries are statically linked — no system dependencies required.
 
-**v2 Features**:
+**Features**:
 - **JPEG XL + JPEG**: Full encode/decode/file I/O for both formats in one package.
+- **Lossless Transcoding**: Reversibly transcode JPEGs into 20% smaller JXLs, and losslessly reconstruct the exact original JPEG bit-for-bit.
 - **NumPy Zero-Copy**: Directly encode from and decode to `numpy.ndarray` without memory duplication.
 - **True Concurrency**: Releases the Python GIL during heavy encoding/decoding operations, enabling true multi-threading.
 - **Async API**: First-class `async`/`await` support via `asyncio.to_thread`.
@@ -129,6 +130,28 @@ jpeg_data = pyjpegxl.jpeg_encode_from_numpy(arr, quality=90)
 info, decoded = pyjpegxl.jpeg_decode_to_numpy(jpeg_data)
 ```
 
+### Direct JPEG ↔ JXL Lossless Transcoding
+
+Repack JPEGs into smaller JXL files losslessly without ever decoding pixels, and revert them exactly bit-for-bit!
+
+```python
+import pyjpegxl
+
+with open("photo.jpg", "rb") as f:
+    jpeg_bytes = f.read()
+
+# Transcode directly (lossless, usually 20% smaller)
+jxl_bytes = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
+
+# Reconstruct the exact original JPEG bit-for-bit
+restored_jpeg_bytes = pyjpegxl.jxl_to_jpeg(jxl_bytes)
+assert jpeg_bytes == restored_jpeg_bytes
+
+# Also available natively for File I/O
+pyjpegxl.jpeg_file_to_jxl("photo.jpg", "smaller_version.jxl")
+pyjpegxl.jxl_file_to_jpeg("smaller_version.jxl", "restored_photo.jpg")
+```
+
 ## Concurrency and Performance
 
 `pyjpegxl` natively releases the Global Interpreter Lock (GIL) and engages `ThreadsRunner` from `libjxl`. If you use `concurrent.futures.ThreadPoolExecutor` or `asyncio.gather()`, multiple images will encode and decode perfectly in parallel without blocking the main Python thread.
@@ -139,9 +162,9 @@ Benchmark processing `images/test.jpg` (decoded to Numpy arrays) among Python JX
 
 | Library | Decode Time (ms) | Peak Python Mem | Encode Time (ms) | Peak Python Mem |
 | :--- | :--- | :--- | :--- | :--- |
-| **`pyjpegxl`** | **35.46** | **0.0 MB** | **180.85** | **0.4 MB** |
-| `pylibjxl` | 110.84 | 0.0 MB | 349.83 | 0.5 MB |
-| `pillow-jxl` | 38.39 | 11.9 MB | 189.19 | 10.6 MB |
+| **`pyjpegxl`** | **36.78** | **0.0 MB** | **184.47** | **0.4 MB** |
+| `pylibjxl` | 114.86 | 0.0 MB | 366.54 | 0.5 MB |
+| `pillow-jxl` | 35.56 | 11.9 MB | 185.22 | 11.3 MB |
 
 > `pyjpegxl` is fundamentally the fastest encoder and decoder, while matching the flawless memory performance of `pylibjxl` due to its zero-copy `IntoPyArray` bridging.
 
@@ -174,6 +197,12 @@ Benchmark processing `images/test.jpg` (decoded to Numpy arrays) among Python JX
 - `jpeg_read_to_numpy(path) -> tuple[JpegInfo, np.ndarray]`
 - `jpeg_write(path, data, width, height, **kwargs) -> int`
 - `jpeg_write_from_numpy(path, array, **kwargs) -> int`
+
+### Transcoding API
+- `jpeg_to_jxl(data: bytes) -> bytes`
+- `jxl_to_jpeg(data: bytes) -> bytes`
+- `jpeg_file_to_jxl(jpeg_path: str, jxl_path: str) -> int`
+- `jxl_file_to_jpeg(jxl_path: str, jpeg_path: str) -> int`
 
 ### Async API
 All sync functions have async variants prefixed with `async_` (JXL) or `async_jpeg_` (JPEG).
