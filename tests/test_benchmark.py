@@ -15,7 +15,9 @@ IMAGES_DIR = Path(__file__).parent.parent / "images"
 TEST_JXL = IMAGES_DIR / "test.jxl"
 TEST_JPG = IMAGES_DIR / "test.jpg"
 
-ITERATIONS = 10
+import os
+
+ITERATIONS = int(os.environ.get("ITERATIONS", 10))
 
 # Skip completely if files are missing
 pytestmark = pytest.mark.skipif(
@@ -32,8 +34,7 @@ def _fmt(label: str, elapsed: float, iters: int, data_bytes: int, peak_mb: float
 
 
 def run_bench(label, iters, data_bytes, func, *args, **kwargs):
-    import gc
-
+    print(f"\n>>> Running bench: {label} ({iters} iters)...")
     gc.collect()
     tracemalloc.start()
     t0 = time.perf_counter()
