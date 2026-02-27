@@ -8,9 +8,9 @@ use pyo3::types::PyBytes;
 use jpegxl_sys::common::types::JxlBool;
 use jpegxl_sys::decode::{
     JxlDecoderCreate, JxlDecoderDestroy, JxlDecoderGetBoxSizeRaw, JxlDecoderGetBoxType,
-    JxlDecoderProcessInput, JxlDecoderReleaseBoxBuffer, JxlDecoderReleaseInput,
-    JxlDecoderReleaseJPEGBuffer, JxlDecoderSetBoxBuffer, JxlDecoderSetDecompressBoxes,
-    JxlDecoderSetInput, JxlDecoderSetJPEGBuffer, JxlDecoderStatus, JxlDecoderSubscribeEvents,
+    JxlDecoderProcessInput, JxlDecoderReleaseBoxBuffer, JxlDecoderReleaseJPEGBuffer,
+    JxlDecoderSetBoxBuffer, JxlDecoderSetDecompressBoxes, JxlDecoderSetInput,
+    JxlDecoderSetJPEGBuffer, JxlDecoderStatus, JxlDecoderSubscribeEvents,
 };
 use jpegxl_sys::encoder::encode::{
     JxlEncoderAddJPEGFrame, JxlEncoderCloseInput, JxlEncoderCreate, JxlEncoderDestroy,
