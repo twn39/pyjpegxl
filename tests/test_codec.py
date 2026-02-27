@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-import pytest
-
 import pyjpegxl
+import pytest
 
 IMAGES_DIR = Path(__file__).parent.parent / "images"
 TEST_JXL = IMAGES_DIR / "test.jxl"
 
 # Skip all tests if images are missing
 pytestmark = pytest.mark.skipif(
-    not TEST_JXL.exists(),
-    reason="images/test.jxl not found"
-)# ---------------------------------------------------------------------------
+    not TEST_JXL.exists(), reason="images/test.jxl not found"
+)  # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def real_image_data() -> tuple[np.ndarray, np.ndarray, bytes]:
@@ -48,6 +45,7 @@ def real_image_data() -> tuple[np.ndarray, np.ndarray, bytes]:
 # Basic bytes round-trip
 # ---------------------------------------------------------------------------
 
+
 class TestBytesAPI:
     def test_round_trip_rgba(self, real_image_data):
         rgba_arr, _, _ = real_image_data
@@ -73,7 +71,9 @@ class TestBytesAPI:
         _, rgb_arr, _ = real_image_data
         px = rgb_arr.tobytes()
         h, w, c = rgb_arr.shape
-        jxl = pyjpegxl.encode(px, w, h, lossless=False, quality=1.0, num_channels=c, speed=pyjpegxl.EncoderSpeed.Lightning)
+        jxl = pyjpegxl.encode(
+            px, w, h, lossless=False, quality=1.0, num_channels=c, speed=pyjpegxl.EncoderSpeed.Lightning
+        )
         meta, _ = pyjpegxl.decode(jxl)
         assert meta.width == w
 
@@ -110,21 +110,16 @@ class TestBytesAPI:
         _, rgb_arr, _ = real_image_data
         px = rgb_arr.tobytes()
         h, w, c = rgb_arr.shape
-        
+
         # Dummy EXIF and XMP signatures
         fake_exif = b"Exif\x00\x00MM\x00*\x00\x00\x00\x08..."
         fake_xmp = b"http://ns.adobe.com/xap/1.0/\x00..."
-        
+
         jxl = pyjpegxl.encode(
-            px, w, h, 
-            lossless=True, 
-            num_channels=c, 
-            speed=pyjpegxl.EncoderSpeed.Lightning,
-            exif=fake_exif, 
-            xmp=fake_xmp
+            px, w, h, lossless=True, num_channels=c, speed=pyjpegxl.EncoderSpeed.Lightning, exif=fake_exif, xmp=fake_xmp
         )
         meta, decoded = pyjpegxl.decode(jxl)
-        
+
         assert meta.exif == fake_exif
         assert meta.xmp == fake_xmp
 
@@ -132,6 +127,7 @@ class TestBytesAPI:
 # ---------------------------------------------------------------------------
 # NumPy zero-copy tests
 # ---------------------------------------------------------------------------
+
 
 class TestNumPy:
     def test_decode_to_numpy_shape(self, real_image_data):
@@ -179,6 +175,7 @@ class TestNumPy:
 # Async tests
 # ---------------------------------------------------------------------------
 
+
 class TestAsync:
     @pytest.mark.asyncio
     async def test_async_decode(self, real_image_data):
@@ -193,7 +190,9 @@ class TestAsync:
         _, rgb_arr, jxl_bytes = real_image_data
         px = rgb_arr.tobytes()
         h, w, c = rgb_arr.shape
-        jxl = await pyjpegxl.async_encode(px, w, h, lossless=True, num_channels=c, speed=pyjpegxl.EncoderSpeed.Lightning)
+        jxl = await pyjpegxl.async_encode(
+            px, w, h, lossless=True, num_channels=c, speed=pyjpegxl.EncoderSpeed.Lightning
+        )
         meta, decoded = pyjpegxl.decode(jxl)
         assert meta.width == w
         assert decoded == px
@@ -209,6 +208,7 @@ class TestAsync:
 # ---------------------------------------------------------------------------
 # File I/O tests
 # ---------------------------------------------------------------------------
+
 
 class TestFileIO:
     def test_write_read_bytes(self, real_image_data, tmp_path):
@@ -357,13 +357,11 @@ class TestTranscoding:
         jxl = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
         assert len(jxl) > 0
         # JXL files start with signature 0xFF0A or container 0x0000000C
-        assert jxl[:2] == b'\xff\x0a' or jxl[:4] == b'\x00\x00\x00\x0c'
+        assert jxl[:2] == b"\xff\x0a" or jxl[:4] == b"\x00\x00\x00\x0c"
 
     def test_jpeg_to_jxl_smaller(self, jpeg_bytes):
         jxl = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
-        assert len(jxl) < len(jpeg_bytes), (
-            f"JXL ({len(jxl)} B) should be smaller than JPEG ({len(jpeg_bytes)} B)"
-        )
+        assert len(jxl) < len(jpeg_bytes), f"JXL ({len(jxl)} B) should be smaller than JPEG ({len(jpeg_bytes)} B)"
 
     def test_roundtrip_byte_exact(self, jpeg_bytes):
         """JPEG → JXL → JPEG must produce the exact same JPEG bytes."""
@@ -375,11 +373,13 @@ class TestTranscoding:
         """jxl_to_jpeg on a JXL not from JPEG transcoding should raise."""
         # Use a real non-JPEG image (PNG)
         from PIL import Image
+
         png_path = Path(__file__).parent.parent / "images" / "test.png"
         rgb_arr = np.array(Image.open(png_path).convert("RGB"))
-        
+
         jxl = pyjpegxl.encode_from_numpy(
-            rgb_arr, lossless=True,
+            rgb_arr,
+            lossless=True,
             speed=pyjpegxl.EncoderSpeed.Lightning,
         )
         with pytest.raises(RuntimeError):

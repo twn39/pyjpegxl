@@ -10,11 +10,11 @@ import os
 from typing import TYPE_CHECKING
 
 from pyjpegxl._pyjpegxl import (
-    Metadata,
     EncoderSpeed,
+    Metadata,
     decode,
-    encode,
     decode_to_numpy,
+    encode,
     encode_from_numpy,
 )
 
@@ -35,7 +35,7 @@ def read(path: str | os.PathLike) -> tuple[Metadata, bytes]:
         return decode(f.read())
 
 
-def read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, "np.ndarray"]:
+def read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, np.ndarray]:
     """Read a JXL file and decode it to a NumPy array.
 
     Args:
@@ -97,7 +97,7 @@ def write(
 
 def write_from_numpy(
     path: str | os.PathLike,
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     lossless: bool = False,
     quality: float = 1.0,
@@ -178,4 +178,3 @@ def jxl_file_to_jpeg(jxl_path: str | os.PathLike, jpeg_path: str | os.PathLike) 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "wb") as f:
         return f.write(jpeg_data)
-

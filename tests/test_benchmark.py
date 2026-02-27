@@ -8,9 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-import pytest
-
 import pyjpegxl
+import pytest
 
 IMAGES_DIR = Path(__file__).parent.parent / "images"
 TEST_JXL = IMAGES_DIR / "test.jxl"
@@ -31,8 +30,10 @@ def _fmt(label: str, elapsed: float, iters: int, data_bytes: int, peak_mb: float
     mem_str = f", Peak Mem: {peak_mb:.1f} MB" if peak_mb > 0 else ""
     return f"{label}: {per_op:.2f} ms/op, {throughput:.1f} MB/s ({iters} iters, {elapsed:.3f}s total){mem_str}"
 
+
 def run_bench(label, iters, data_bytes, func, *args, **kwargs):
     import gc
+
     gc.collect()
     tracemalloc.start()
     t0 = time.perf_counter()
@@ -47,6 +48,7 @@ def run_bench(label, iters, data_bytes, func, *args, **kwargs):
 # ---------------------------------------------------------------------------
 # Core codec benchmarks
 # ---------------------------------------------------------------------------
+
 
 class TestBenchRealImage:
     """Benchmark with real JPEG and JXL images."""
@@ -67,24 +69,44 @@ class TestBenchRealImage:
             self.jxl_source = f.read()
 
     def test_bench_encode_bytes(self):
-        run_bench("encode(bytes, real image)", ITERATIONS, len(self.px), 
-                  pyjpegxl.encode, self.px, self.w, self.h, num_channels=self.c)
+        run_bench(
+            "encode(bytes, real image)",
+            ITERATIONS,
+            len(self.px),
+            pyjpegxl.encode,
+            self.px,
+            self.w,
+            self.h,
+            num_channels=self.c,
+        )
 
     def test_bench_decode_bytes(self):
-        run_bench("decode(bytes, test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  pyjpegxl.decode, self.jxl_source)
+        run_bench("decode(bytes, test.jxl)", ITERATIONS, len(self.jxl_source), pyjpegxl.decode, self.jxl_source)
 
     def test_bench_encode_numpy_lossless(self):
-        run_bench("encode_from_numpy(lossless, real image)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, lossless=True)
+        run_bench(
+            "encode_from_numpy(lossless, real image)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            lossless=True,
+        )
 
     def test_bench_encode_numpy_lossy_std(self):
-        run_bench("encode_from_numpy(lossy q1.0/std, real image)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, quality=1.0)
+        run_bench(
+            "encode_from_numpy(lossy q1.0/std, real image)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            quality=1.0,
+        )
 
     def test_bench_decode_numpy(self):
-        run_bench("decode_to_numpy(test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  pyjpegxl.decode_to_numpy, self.jxl_source)
+        run_bench(
+            "decode_to_numpy(test.jxl)", ITERATIONS, len(self.jxl_source), pyjpegxl.decode_to_numpy, self.jxl_source
+        )
 
     def test_bench_concurrent_decode(self):
         """Compare sequential vs 4-thread concurrent decode using test.jxl."""
@@ -106,10 +128,7 @@ class TestBenchRealImage:
         par_time = time.perf_counter() - t0
 
         speedup = seq_time / par_time
-        print(
-            f"concurrent decode (test.jxl): seq={seq_time:.3f}s, par(4)={par_time:.3f}s, "
-            f"speedup={speedup:.2f}x"
-        )
+        print(f"concurrent decode (test.jxl): seq={seq_time:.3f}s, par(4)={par_time:.3f}s, speedup={speedup:.2f}x")
 
     def test_bench_concurrent_encode(self):
         """Compare sequential vs 4-thread concurrent encode on real image."""
@@ -131,15 +150,13 @@ class TestBenchRealImage:
         par_time = time.perf_counter() - t0
 
         speedup = seq_time / par_time
-        print(
-            f"concurrent encode (real image): seq={seq_time:.3f}s, par(4)={par_time:.3f}s, "
-            f"speedup={speedup:.2f}x"
-        )
+        print(f"concurrent encode (real image): seq={seq_time:.3f}s, par(4)={par_time:.3f}s, speedup={speedup:.2f}x")
 
 
 # ---------------------------------------------------------------------------
 # Comparative Benchmarks: pyjpegxl vs pylibjxl
 # ---------------------------------------------------------------------------
+
 
 class TestBenchPylibjxlRealImage:
     """Benchmark comparing pyjpegxl vs pylibjxl on a real image."""
@@ -147,7 +164,7 @@ class TestBenchPylibjxlRealImage:
     @pytest.fixture(autouse=True)
     def setup(self):
         import pylibjxl
-        
+
         self.pylibjxl = pylibjxl
 
         meta, decoded = pyjpegxl.read_to_numpy(TEST_JXL)
@@ -161,26 +178,53 @@ class TestBenchPylibjxlRealImage:
             self.jxl_source = f.read()
 
     def test_compare_encode_numpy_lossy(self):
-        run_bench("pyjpegxl encode (real, lossy ~std)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, quality=1.0) # -> ~19MB file size for test.jpg
-        run_bench("pylibjxl encode (real, lossy ~std)", ITERATIONS, self.arr.nbytes, 
-                  self.pylibjxl.encode, self.arr, distance=6.0, lossless=False)
+        run_bench(
+            "pyjpegxl encode (real, lossy ~std)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            quality=1.0,
+        )  # -> ~19MB file size for test.jpg
+        run_bench(
+            "pylibjxl encode (real, lossy ~std)",
+            ITERATIONS,
+            self.arr.nbytes,
+            self.pylibjxl.encode,
+            self.arr,
+            distance=6.0,
+            lossless=False,
+        )
 
     def test_compare_encode_numpy_lossless(self):
-        run_bench("pyjpegxl encode (real, lossless)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, lossless=True)
-        run_bench("pylibjxl encode (real, lossless)", ITERATIONS, self.arr.nbytes, 
-                  self.pylibjxl.encode, self.arr, lossless=True)
+        run_bench(
+            "pyjpegxl encode (real, lossless)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            lossless=True,
+        )
+        run_bench(
+            "pylibjxl encode (real, lossless)",
+            ITERATIONS,
+            self.arr.nbytes,
+            self.pylibjxl.encode,
+            self.arr,
+            lossless=True,
+        )
 
     def test_compare_decode_numpy(self):
-        run_bench("pyjpegxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  pyjpegxl.decode_to_numpy, self.jxl_source)
-        run_bench("pylibjxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  self.pylibjxl.decode, self.jxl_source)
+        run_bench(
+            "pyjpegxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), pyjpegxl.decode_to_numpy, self.jxl_source
+        )
+        run_bench("pylibjxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), self.pylibjxl.decode, self.jxl_source)
+
 
 # ---------------------------------------------------------------------------
 # Comparative Benchmarks: pyjpegxl vs pillow-jxl-plugin (Real Image)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not TEST_JXL.exists(), reason="images/test.jxl not found")
 class TestBenchPillowJxlRealImage:
@@ -188,10 +232,10 @@ class TestBenchPillowJxlRealImage:
 
     @pytest.fixture(autouse=True)
     def setup(self):
-        import pillow_jxl
         import io
+
         from PIL import Image
-        
+
         self.Image = Image
         self.io = io
 
@@ -209,19 +253,19 @@ class TestBenchPillowJxlRealImage:
         def pillow_encode_lossy(arr):
             img = self.Image.fromarray(arr)
             buf = self.io.BytesIO()
-            img.save(buf, format='JXL', quality=90) # equivalent to pyjpegxl q=1.0
+            img.save(buf, format="JXL", quality=90)  # equivalent to pyjpegxl q=1.0
             return buf.getvalue()
 
         def pillow_encode_lossless(arr):
             img = self.Image.fromarray(arr)
             buf = self.io.BytesIO()
-            img.save(buf, format='JXL', lossless=True)
+            img.save(buf, format="JXL", lossless=True)
             return buf.getvalue()
 
         def pillow_decode(data):
             buf = self.io.BytesIO(data)
             img = self.Image.open(buf)
-            img.load() # Force decode
+            img.load()  # Force decode
             return np.array(img)
 
         self.encode_lossy = pillow_encode_lossy
@@ -229,27 +273,38 @@ class TestBenchPillowJxlRealImage:
         self.decode = pillow_decode
 
     def test_compare_encode_numpy_lossy_pillow(self):
-        run_bench("pyjpegxl encode (real, lossy ~std)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, quality=1.0) # -> ~19MB file size for test.jpg
-        run_bench("pillow-jxl encode (real, lossy ~std)", ITERATIONS, self.arr.nbytes, 
-                  self.encode_lossy, self.arr)
+        run_bench(
+            "pyjpegxl encode (real, lossy ~std)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            quality=1.0,
+        )  # -> ~19MB file size for test.jpg
+        run_bench("pillow-jxl encode (real, lossy ~std)", ITERATIONS, self.arr.nbytes, self.encode_lossy, self.arr)
 
     def test_compare_encode_numpy_lossless_pillow(self):
-        run_bench("pyjpegxl encode (real, lossless)", ITERATIONS, self.arr.nbytes, 
-                  pyjpegxl.encode_from_numpy, self.arr, lossless=True)
-        run_bench("pillow-jxl encode (real, lossless)", ITERATIONS, self.arr.nbytes, 
-                  self.encode_lossless, self.arr)
+        run_bench(
+            "pyjpegxl encode (real, lossless)",
+            ITERATIONS,
+            self.arr.nbytes,
+            pyjpegxl.encode_from_numpy,
+            self.arr,
+            lossless=True,
+        )
+        run_bench("pillow-jxl encode (real, lossless)", ITERATIONS, self.arr.nbytes, self.encode_lossless, self.arr)
 
     def test_compare_decode_numpy_pillow(self):
-        run_bench("pyjpegxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  pyjpegxl.decode_to_numpy, self.jxl_source)
-        run_bench("pillow-jxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), 
-                  self.decode, self.jxl_source)
+        run_bench(
+            "pyjpegxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), pyjpegxl.decode_to_numpy, self.jxl_source
+        )
+        run_bench("pillow-jxl decode (test.jxl)", ITERATIONS, len(self.jxl_source), self.decode, self.jxl_source)
 
 
 # ---------------------------------------------------------------------------
 # JPEG Core Benchmarks
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not TEST_JPG.exists(), reason="images/test.jpg not found")
 class TestBenchJPEG:
@@ -266,20 +321,38 @@ class TestBenchJPEG:
             self.jpg_source = f.read()
 
     def test_bench_jpeg_decode_bytes(self):
-        run_bench("jpeg_decode(bytes, test.jpg)", ITERATIONS, len(self.jpg_source),
-                  pyjpegxl.jpeg_decode, self.jpg_source)
+        run_bench(
+            "jpeg_decode(bytes, test.jpg)", ITERATIONS, len(self.jpg_source), pyjpegxl.jpeg_decode, self.jpg_source
+        )
 
     def test_bench_jpeg_decode_numpy(self):
-        run_bench("jpeg_decode_to_numpy(test.jpg)", ITERATIONS, len(self.jpg_source),
-                  pyjpegxl.jpeg_decode_to_numpy, self.jpg_source)
+        run_bench(
+            "jpeg_decode_to_numpy(test.jpg)",
+            ITERATIONS,
+            len(self.jpg_source),
+            pyjpegxl.jpeg_decode_to_numpy,
+            self.jpg_source,
+        )
 
     def test_bench_jpeg_encode_q95(self):
-        run_bench("jpeg_encode_from_numpy(q95)", ITERATIONS, self.rgb_arr.nbytes,
-                  pyjpegxl.jpeg_encode_from_numpy, self.rgb_arr, quality=95)
+        run_bench(
+            "jpeg_encode_from_numpy(q95)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            pyjpegxl.jpeg_encode_from_numpy,
+            self.rgb_arr,
+            quality=95,
+        )
 
     def test_bench_jpeg_encode_q75(self):
-        run_bench("jpeg_encode_from_numpy(q75)", ITERATIONS, self.rgb_arr.nbytes,
-                  pyjpegxl.jpeg_encode_from_numpy, self.rgb_arr, quality=75)
+        run_bench(
+            "jpeg_encode_from_numpy(q75)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            pyjpegxl.jpeg_encode_from_numpy,
+            self.rgb_arr,
+            quality=75,
+        )
 
     def test_bench_jpeg_concurrent_decode(self):
         """Compare sequential vs 4-thread concurrent JPEG decode."""
@@ -299,15 +372,13 @@ class TestBenchJPEG:
         par_time = time.perf_counter() - t0
 
         speedup = seq_time / par_time
-        print(
-            f"concurrent JPEG decode: seq={seq_time:.3f}s, par(4)={par_time:.3f}s, "
-            f"speedup={speedup:.2f}x"
-        )
+        print(f"concurrent JPEG decode: seq={seq_time:.3f}s, par(4)={par_time:.3f}s, speedup={speedup:.2f}x")
 
 
 # ---------------------------------------------------------------------------
 # Comparative Benchmarks: JPEG — pyjpegxl vs pylibjxl vs Pillow
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not TEST_JPG.exists(), reason="images/test.jpg not found")
 class TestBenchJPEGCompare:
@@ -315,8 +386,9 @@ class TestBenchJPEGCompare:
 
     @pytest.fixture(autouse=True)
     def setup(self):
-        import pylibjxl
         import io
+
+        import pylibjxl
         from PIL import Image
 
         self.pylibjxl = pylibjxl
@@ -332,7 +404,7 @@ class TestBenchJPEGCompare:
         def pillow_encode(arr, quality=95):
             img = self.Image.fromarray(arr)
             buf = self.io.BytesIO()
-            img.save(buf, format='JPEG', quality=quality)
+            img.save(buf, format="JPEG", quality=quality)
             return buf.getvalue()
 
         def pillow_decode(data):
@@ -345,26 +417,62 @@ class TestBenchJPEGCompare:
         self.pillow_decode = pillow_decode
 
     def test_compare_jpeg_encode_q95(self):
-        run_bench("pyjpegxl jpeg_encode (q95)", ITERATIONS, self.rgb_arr.nbytes,
-                  pyjpegxl.jpeg_encode_from_numpy, self.rgb_arr, quality=95)
-        run_bench("pylibjxl encode_jpeg (q95)", ITERATIONS, self.rgb_arr.nbytes,
-                  self.pylibjxl.encode_jpeg, self.rgb_arr, quality=95)
-        run_bench("Pillow JPEG encode (q95)", ITERATIONS, self.rgb_arr.nbytes,
-                  self.pillow_encode, self.rgb_arr, quality=95)
+        run_bench(
+            "pyjpegxl jpeg_encode (q95)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            pyjpegxl.jpeg_encode_from_numpy,
+            self.rgb_arr,
+            quality=95,
+        )
+        run_bench(
+            "pylibjxl encode_jpeg (q95)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            self.pylibjxl.encode_jpeg,
+            self.rgb_arr,
+            quality=95,
+        )
+        run_bench(
+            "Pillow JPEG encode (q95)", ITERATIONS, self.rgb_arr.nbytes, self.pillow_encode, self.rgb_arr, quality=95
+        )
 
     def test_compare_jpeg_encode_q75(self):
-        run_bench("pyjpegxl jpeg_encode (q75)", ITERATIONS, self.rgb_arr.nbytes,
-                  pyjpegxl.jpeg_encode_from_numpy, self.rgb_arr, quality=75)
-        run_bench("pylibjxl encode_jpeg (q75)", ITERATIONS, self.rgb_arr.nbytes,
-                  self.pylibjxl.encode_jpeg, self.rgb_arr, quality=75)
-        run_bench("Pillow JPEG encode (q75)", ITERATIONS, self.rgb_arr.nbytes,
-                  self.pillow_encode, self.rgb_arr, quality=75)
+        run_bench(
+            "pyjpegxl jpeg_encode (q75)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            pyjpegxl.jpeg_encode_from_numpy,
+            self.rgb_arr,
+            quality=75,
+        )
+        run_bench(
+            "pylibjxl encode_jpeg (q75)",
+            ITERATIONS,
+            self.rgb_arr.nbytes,
+            self.pylibjxl.encode_jpeg,
+            self.rgb_arr,
+            quality=75,
+        )
+        run_bench(
+            "Pillow JPEG encode (q75)", ITERATIONS, self.rgb_arr.nbytes, self.pillow_encode, self.rgb_arr, quality=75
+        )
 
     def test_compare_jpeg_decode(self):
-        run_bench("pyjpegxl jpeg_decode (test.jpg)", ITERATIONS, len(self.jpg_source),
-                  pyjpegxl.jpeg_decode_to_numpy, self.jpg_source)
-        run_bench("pylibjxl decode_jpeg (test.jpg)", ITERATIONS, len(self.jpg_source),
-                  self.pylibjxl.decode_jpeg, self.jpg_source)
-        run_bench("Pillow JPEG decode (test.jpg)", ITERATIONS, len(self.jpg_source),
-                  self.pillow_decode, self.jpg_source)
-
+        run_bench(
+            "pyjpegxl jpeg_decode (test.jpg)",
+            ITERATIONS,
+            len(self.jpg_source),
+            pyjpegxl.jpeg_decode_to_numpy,
+            self.jpg_source,
+        )
+        run_bench(
+            "pylibjxl decode_jpeg (test.jpg)",
+            ITERATIONS,
+            len(self.jpg_source),
+            self.pylibjxl.decode_jpeg,
+            self.jpg_source,
+        )
+        run_bench(
+            "Pillow JPEG decode (test.jpg)", ITERATIONS, len(self.jpg_source), self.pillow_decode, self.jpg_source
+        )

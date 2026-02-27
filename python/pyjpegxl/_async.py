@@ -10,19 +10,6 @@ import asyncio
 import os
 from typing import TYPE_CHECKING
 
-from pyjpegxl._pyjpegxl import (
-    Metadata,
-    EncoderSpeed,
-    decode,
-    encode,
-    decode_to_numpy,
-    encode_from_numpy,
-    JpegInfo,
-    jpeg_decode,
-    jpeg_encode,
-    jpeg_decode_to_numpy,
-    jpeg_encode_from_numpy,
-)
 from pyjpegxl._io import (
     read,
     read_to_numpy,
@@ -34,6 +21,19 @@ from pyjpegxl._jpeg_io import (
     jpeg_read_to_numpy,
     jpeg_write,
     jpeg_write_from_numpy,
+)
+from pyjpegxl._pyjpegxl import (
+    EncoderSpeed,
+    JpegInfo,
+    Metadata,
+    decode,
+    decode_to_numpy,
+    encode,
+    encode_from_numpy,
+    jpeg_decode,
+    jpeg_decode_to_numpy,
+    jpeg_encode,
+    jpeg_encode_from_numpy,
 )
 
 if TYPE_CHECKING:
@@ -77,13 +77,13 @@ async def async_encode(
     )
 
 
-async def async_decode_to_numpy(data: bytes) -> tuple[Metadata, "np.ndarray"]:
+async def async_decode_to_numpy(data: bytes) -> tuple[Metadata, np.ndarray]:
     """Async decode JXL bytes → (Metadata, numpy.ndarray)."""
     return await asyncio.to_thread(decode_to_numpy, data)
 
 
 async def async_encode_from_numpy(
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     lossless: bool = False,
     quality: float = 1.0,
@@ -113,7 +113,7 @@ async def async_read(path: str | os.PathLike) -> tuple[Metadata, bytes]:
     return await asyncio.to_thread(read, path)
 
 
-async def async_read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, "np.ndarray"]:
+async def async_read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, np.ndarray]:
     """Async read a JXL file → (Metadata, numpy.ndarray)."""
     return await asyncio.to_thread(read_to_numpy, path)
 
@@ -149,7 +149,7 @@ async def async_write(
 
 async def async_write_from_numpy(
     path: str | os.PathLike,
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     lossless: bool = False,
     quality: float = 1.0,
@@ -199,13 +199,13 @@ async def async_jpeg_encode(
     )
 
 
-async def async_jpeg_decode_to_numpy(data: bytes) -> tuple[JpegInfo, "np.ndarray"]:
+async def async_jpeg_decode_to_numpy(data: bytes) -> tuple[JpegInfo, np.ndarray]:
     """Async decode JPEG bytes → (JpegInfo, numpy.ndarray)."""
     return await asyncio.to_thread(jpeg_decode_to_numpy, data)
 
 
 async def async_jpeg_encode_from_numpy(
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     quality: int = 95,
 ) -> bytes:
@@ -227,7 +227,7 @@ async def async_jpeg_read(path: str | os.PathLike) -> tuple[JpegInfo, bytes]:
     return await asyncio.to_thread(jpeg_read, path)
 
 
-async def async_jpeg_read_to_numpy(path: str | os.PathLike) -> tuple[JpegInfo, "np.ndarray"]:
+async def async_jpeg_read_to_numpy(path: str | os.PathLike) -> tuple[JpegInfo, np.ndarray]:
     """Async read a JPEG file → (JpegInfo, numpy.ndarray)."""
     return await asyncio.to_thread(jpeg_read_to_numpy, path)
 
@@ -255,7 +255,7 @@ async def async_jpeg_write(
 
 async def async_jpeg_write_from_numpy(
     path: str | os.PathLike,
-    array: "np.ndarray",
+    array: np.ndarray,
     *,
     quality: int = 95,
 ) -> int:
@@ -272,8 +272,8 @@ async def async_jpeg_write_from_numpy(
 # JPEG ↔ JXL lossless transcoding — async
 # ---------------------------------------------------------------------------
 
-from pyjpegxl._pyjpegxl import jpeg_to_jxl, jxl_to_jpeg  # noqa: E402
 from pyjpegxl._io import jpeg_file_to_jxl, jxl_file_to_jpeg  # noqa: E402
+from pyjpegxl._pyjpegxl import jpeg_to_jxl, jxl_to_jpeg  # noqa: E402
 
 
 async def async_jpeg_to_jxl(data: bytes) -> bytes:
@@ -300,4 +300,3 @@ async def async_jxl_file_to_jpeg(
 ) -> int:
     """Async reconstruct original JPEG from a JXL file."""
     return await asyncio.to_thread(jxl_file_to_jpeg, jxl_path, jpeg_path)
-
