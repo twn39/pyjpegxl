@@ -37,18 +37,6 @@ Homepage = "https://github.com/user/pyjpegxl"
 Repository = "https://github.com/user/pyjpegxl"
 Issues = "https://github.com/user/pyjpegxl/issues"
 
-[project.optional-dependencies]
-test = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21.0",
-    "pillow>=10.0.0",
-    "pytest-cov>=4.1.0",
-]
-dev = [
-    "maturin>=1.0",
-    "ruff>=0.1.0",
-]
-
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
@@ -85,3 +73,17 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.0",
+    "ruff>=0.15.4",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "pillow>=10.0.0",
+    "pillow-jxl-plugin>=1.0.0",
+    "pytest-cov>=4.1.0",
+    "memory-profiler>=0.61.0",
+    "psutil>=7.2.2",
+    "pylibjxl>=0.3.8",
+]
