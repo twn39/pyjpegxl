@@ -1,5 +1,13 @@
+<div align="center">
+
 # pyjpegxl
 
+[![PyPI version](https://img.shields.io/pypi/v/pyjpegxl.svg)](https://pypi.org/project/pyjpegxl/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pyjpegxl.svg)](https://pypi.org/project/pyjpegxl/)
+[![CI Status](https://github.com/twn39/pyjpegxl/actions/workflows/ci.yml/badge.svg)](https://github.com/twn39/pyjpegxl/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+
+</div>
 Python bindings for **JPEG XL** and **JPEG** encoding/decoding, powered by [libjxl](https://github.com/libjxl/libjxl) and [libjpeg-turbo](https://libjpeg-turbo.org/). Both libraries are statically linked — no system dependencies required.
 
 **Features**:
@@ -214,4 +222,4 @@ All sync functions have async variants prefixed with `async_` (JXL) or `async_jp
 
 ## License
 
-MIT
+BSD 3-Clause
