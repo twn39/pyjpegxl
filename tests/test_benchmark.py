@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import os
 import time
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
@@ -14,8 +16,6 @@ import pytest
 IMAGES_DIR = Path(__file__).parent.parent / "images"
 TEST_JXL = IMAGES_DIR / "test.jxl"
 TEST_JPG = IMAGES_DIR / "test.jpg"
-
-import os
 
 ITERATIONS = int(os.environ.get("ITERATIONS", 10))
 
