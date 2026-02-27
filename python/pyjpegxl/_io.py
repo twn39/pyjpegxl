@@ -131,3 +131,51 @@ def write_from_numpy(
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "wb") as f:
         return f.write(jxl)
+
+
+# ---------------------------------------------------------------------------
+# JPEG ↔ JXL lossless transcoding — file I/O
+# ---------------------------------------------------------------------------
+
+from pyjpegxl._pyjpegxl import jpeg_to_jxl, jxl_to_jpeg  # noqa: E402
+
+
+def jpeg_file_to_jxl(jpeg_path: str | os.PathLike, jxl_path: str | os.PathLike) -> int:
+    """Losslessly transcode a JPEG file to JXL.
+
+    The original JPEG can be reconstructed bit-for-bit from the resulting JXL.
+
+    Args:
+        jpeg_path: Path to the source .jpg/.jpeg file.
+        jxl_path: Destination path for the .jxl file.
+
+    Returns:
+        Number of bytes written.
+    """
+    with open(jpeg_path, "rb") as f:
+        jpeg_data = f.read()
+    jxl_data = jpeg_to_jxl(jpeg_data)
+    out = os.fspath(jxl_path)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "wb") as f:
+        return f.write(jxl_data)
+
+
+def jxl_file_to_jpeg(jxl_path: str | os.PathLike, jpeg_path: str | os.PathLike) -> int:
+    """Reconstruct the original JPEG from a JXL created via lossless transcoding.
+
+    Args:
+        jxl_path: Path to the source .jxl file.
+        jpeg_path: Destination path for the .jpg/.jpeg file.
+
+    Returns:
+        Number of bytes written.
+    """
+    with open(jxl_path, "rb") as f:
+        jxl_data = f.read()
+    jpeg_data = jxl_to_jpeg(jxl_data)
+    out = os.fspath(jpeg_path)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "wb") as f:
+        return f.write(jpeg_data)
+

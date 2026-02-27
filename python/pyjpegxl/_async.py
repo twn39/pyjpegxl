@@ -266,3 +266,38 @@ async def async_jpeg_write_from_numpy(
         array,
         quality=quality,
     )
+
+
+# ---------------------------------------------------------------------------
+# JPEG ↔ JXL lossless transcoding — async
+# ---------------------------------------------------------------------------
+
+from pyjpegxl._pyjpegxl import jpeg_to_jxl, jxl_to_jpeg  # noqa: E402
+from pyjpegxl._io import jpeg_file_to_jxl, jxl_file_to_jpeg  # noqa: E402
+
+
+async def async_jpeg_to_jxl(data: bytes) -> bytes:
+    """Async lossless transcode JPEG bytes → JXL bytes."""
+    return await asyncio.to_thread(jpeg_to_jxl, data)
+
+
+async def async_jxl_to_jpeg(data: bytes) -> bytes:
+    """Async reconstruct JPEG bytes from JXL bytes."""
+    return await asyncio.to_thread(jxl_to_jpeg, data)
+
+
+async def async_jpeg_file_to_jxl(
+    jpeg_path: str | os.PathLike,
+    jxl_path: str | os.PathLike,
+) -> int:
+    """Async losslessly transcode a JPEG file to JXL."""
+    return await asyncio.to_thread(jpeg_file_to_jxl, jpeg_path, jxl_path)
+
+
+async def async_jxl_file_to_jpeg(
+    jxl_path: str | os.PathLike,
+    jpeg_path: str | os.PathLike,
+) -> int:
+    """Async reconstruct original JPEG from a JXL file."""
+    return await asyncio.to_thread(jxl_file_to_jpeg, jxl_path, jpeg_path)
+
