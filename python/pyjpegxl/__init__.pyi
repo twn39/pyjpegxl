@@ -279,3 +279,46 @@ async def async_jpeg_write_from_numpy(
     path: str | os.PathLike, array: "npt.NDArray[np.uint8]", *,
     quality: int = 95,
 ) -> int: ...
+
+
+# ===========================================================================
+# JPEG ↔ JXL Lossless Transcoding — Sync bytes API
+# ===========================================================================
+
+
+def jpeg_to_jxl(data: bytes) -> bytes:
+    """Losslessly transcode JPEG bytes → JXL bytes (bit-exact roundtrip)."""
+    ...
+
+def jxl_to_jpeg(data: bytes) -> bytes:
+    """Reconstruct the original JPEG bytes from a JXL created via lossless transcoding."""
+    ...
+
+
+# ===========================================================================
+# JPEG ↔ JXL Lossless Transcoding — Sync file I/O
+# ===========================================================================
+
+
+def jpeg_file_to_jxl(jpeg_path: str | os.PathLike, jxl_path: str | os.PathLike) -> int:
+    """Losslessly transcode a JPEG file to JXL. Returns bytes written."""
+    ...
+
+def jxl_file_to_jpeg(jxl_path: str | os.PathLike, jpeg_path: str | os.PathLike) -> int:
+    """Reconstruct original JPEG from a JXL file. Returns bytes written."""
+    ...
+
+
+# ===========================================================================
+# JPEG ↔ JXL Lossless Transcoding — Async
+# ===========================================================================
+
+
+async def async_jpeg_to_jxl(data: bytes) -> bytes: ...
+async def async_jxl_to_jpeg(data: bytes) -> bytes: ...
+async def async_jpeg_file_to_jxl(
+    jpeg_path: str | os.PathLike, jxl_path: str | os.PathLike,
+) -> int: ...
+async def async_jxl_file_to_jpeg(
+    jxl_path: str | os.PathLike, jpeg_path: str | os.PathLike,
+) -> int: ...

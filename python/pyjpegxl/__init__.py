@@ -16,12 +16,17 @@ from pyjpegxl._pyjpegxl import (
     jpeg_encode,
     jpeg_decode_to_numpy,
     jpeg_encode_from_numpy,
+    # JPEG ↔ JXL lossless transcoding
+    jpeg_to_jxl,
+    jxl_to_jpeg,
 )
 from pyjpegxl._io import (
     read,
     read_to_numpy,
     write,
     write_from_numpy,
+    jpeg_file_to_jxl,
+    jxl_file_to_jpeg,
 )
 from pyjpegxl._jpeg_io import (
     jpeg_read,
@@ -48,6 +53,11 @@ from pyjpegxl._async import (
     async_jpeg_read_to_numpy,
     async_jpeg_write,
     async_jpeg_write_from_numpy,
+    # JPEG ↔ JXL transcoding async
+    async_jpeg_to_jxl,
+    async_jxl_to_jpeg,
+    async_jpeg_file_to_jxl,
+    async_jxl_file_to_jpeg,
 )
 
 __all__ = [
@@ -91,6 +101,17 @@ __all__ = [
     "async_jpeg_read_to_numpy",
     "async_jpeg_write",
     "async_jpeg_write_from_numpy",
+    # JPEG ↔ JXL lossless transcoding — bytes
+    "jpeg_to_jxl",
+    "jxl_to_jpeg",
+    # JPEG ↔ JXL lossless transcoding — file I/O
+    "jpeg_file_to_jxl",
+    "jxl_file_to_jpeg",
+    # JPEG ↔ JXL lossless transcoding — async
+    "async_jpeg_to_jxl",
+    "async_jxl_to_jpeg",
+    "async_jpeg_file_to_jxl",
+    "async_jxl_file_to_jpeg",
     # Types
     "Metadata",
     "EncoderSpeed",

@@ -335,3 +335,83 @@ class TestJPEG:
         info, decoded = await pyjpegxl.async_jpeg_read_to_numpy(out)
         assert decoded.shape == jpeg_rgb_arr.shape
 
+
+# ---------------------------------------------------------------------------
+# JPEG ↔ JXL lossless transcoding tests
+# ---------------------------------------------------------------------------
+
+
+class TestTranscoding:
+    @pytest.fixture(scope="class")
+    def jpeg_bytes(self):
+        """Get raw JPEG bytes from test.jpg or generate via turbojpeg."""
+        if TEST_JPG.exists():
+            with open(TEST_JPG, "rb") as f:
+                return f.read()
+        else:
+            # Generate a synthetic JPEG via the jpeg_encode pipeline
+            arr = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+            return pyjpegxl.jpeg_encode_from_numpy(arr, quality=95)
+
+    def test_jpeg_to_jxl_basic(self, jpeg_bytes):
+        jxl = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
+        assert len(jxl) > 0
+        # JXL files start with signature 0xFF0A or container 0x0000000C
+        assert jxl[:2] == b'\xff\x0a' or jxl[:4] == b'\x00\x00\x00\x0c'
+
+    def test_jpeg_to_jxl_smaller(self, jpeg_bytes):
+        jxl = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
+        assert len(jxl) < len(jpeg_bytes), (
+            f"JXL ({len(jxl)} B) should be smaller than JPEG ({len(jpeg_bytes)} B)"
+        )
+
+    def test_roundtrip_byte_exact(self, jpeg_bytes):
+        """JPEG → JXL → JPEG must produce the exact same JPEG bytes."""
+        jxl = pyjpegxl.jpeg_to_jxl(jpeg_bytes)
+        reconstructed = pyjpegxl.jxl_to_jpeg(jxl)
+        assert reconstructed == jpeg_bytes
+
+    def test_jxl_to_jpeg_non_jpeg_source_raises(self, tmp_path):
+        """jxl_to_jpeg on a JXL not from JPEG transcoding should raise."""
+        # Use a real non-JPEG image (PNG)
+        from PIL import Image
+        png_path = Path(__file__).parent.parent / "images" / "test.png"
+        rgb_arr = np.array(Image.open(png_path).convert("RGB"))
+        
+        jxl = pyjpegxl.encode_from_numpy(
+            rgb_arr, lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+        )
+        with pytest.raises(RuntimeError):
+            pyjpegxl.jxl_to_jpeg(jxl)
+
+    def test_file_transcoding_roundtrip(self, jpeg_bytes, tmp_path):
+        jpeg_in = tmp_path / "input.jpg"
+        jxl_out = tmp_path / "transcoded.jxl"
+        jpeg_out = tmp_path / "reconstructed.jpg"
+
+        jpeg_in.write_bytes(jpeg_bytes)
+
+        n1 = pyjpegxl.jpeg_file_to_jxl(jpeg_in, jxl_out)
+        assert n1 > 0
+        assert jxl_out.exists()
+
+        n2 = pyjpegxl.jxl_file_to_jpeg(jxl_out, jpeg_out)
+        assert n2 > 0
+        assert jpeg_out.read_bytes() == jpeg_bytes
+
+    @pytest.mark.asyncio
+    async def test_async_transcoding(self, jpeg_bytes, tmp_path):
+        jxl = await pyjpegxl.async_jpeg_to_jxl(jpeg_bytes)
+        reconstructed = await pyjpegxl.async_jxl_to_jpeg(jxl)
+        assert reconstructed == jpeg_bytes
+
+        # File I/O async
+        jpeg_in = tmp_path / "async_input.jpg"
+        jxl_out = tmp_path / "async_transcoded.jxl"
+        jpeg_out = tmp_path / "async_reconstructed.jpg"
+        jpeg_in.write_bytes(jpeg_bytes)
+
+        await pyjpegxl.async_jpeg_file_to_jxl(jpeg_in, jxl_out)
+        await pyjpegxl.async_jxl_file_to_jpeg(jxl_out, jpeg_out)
+        assert jpeg_out.read_bytes() == jpeg_bytes

@@ -9,10 +9,37 @@ use jpegxl_sys::common::types::JxlBool;
 use jpegxl_sys::decode::{
     JxlDecoderCreate, JxlDecoderDestroy, JxlDecoderGetBoxSizeRaw, JxlDecoderGetBoxType,
     JxlDecoderProcessInput, JxlDecoderReleaseBoxBuffer, JxlDecoderReleaseInput,
-    JxlDecoderSetBoxBuffer, JxlDecoderSetDecompressBoxes, JxlDecoderSetInput, JxlDecoderStatus,
-    JxlDecoderSubscribeEvents,
+    JxlDecoderReleaseJPEGBuffer, JxlDecoderSetBoxBuffer, JxlDecoderSetDecompressBoxes,
+    JxlDecoderSetInput, JxlDecoderSetJPEGBuffer, JxlDecoderStatus, JxlDecoderSubscribeEvents,
+};
+use jpegxl_sys::encoder::encode::{
+    JxlEncoderAddJPEGFrame, JxlEncoderCloseInput, JxlEncoderCreate, JxlEncoderDestroy,
+    JxlEncoderFrameSettingsCreate, JxlEncoderProcessOutput, JxlEncoderSetParallelRunner,
+    JxlEncoderStatus, JxlEncoderStoreJPEGMetadata, JxlEncoderUseContainer,
+};
+use jpegxl_sys::threads::thread_parallel_runner::{
+    JxlThreadParallelRunner, JxlThreadParallelRunnerCreate,
+    JxlThreadParallelRunnerDefaultNumWorkerThreads, JxlThreadParallelRunnerDestroy,
 };
 use std::ptr;
+
+// ---------------------------------------------------------------------------
+// RAII Guards for jpegxl-sys FFI types to prevent memory leaks on panic
+// ---------------------------------------------------------------------------
+macro_rules! define_guard {
+    ($name:ident, $destroy:path) => {
+        struct $name<T>(*mut T);
+        impl<T> Drop for $name<T> {
+            fn drop(&mut self) {
+                // Safety: C FFI destroy functions are safe to call on pointers allocated by create functions
+                unsafe { $destroy(self.0 as _) }
+            }
+        }
+    };
+}
+define_guard!(EncoderGuard, JxlEncoderDestroy);
+define_guard!(DecoderGuard, JxlDecoderDestroy);
+define_guard!(RunnerGuard, JxlThreadParallelRunnerDestroy);
 
 /// Image metadata returned by decode.
 #[pyclass(get_all)]
@@ -86,18 +113,17 @@ fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
         if dec.is_null() {
             return (None, None);
         }
+        let _dec_guard = DecoderGuard(dec);
 
         let events = (JxlDecoderStatus::Box as std::os::raw::c_int)
             | (JxlDecoderStatus::BoxComplete as std::os::raw::c_int);
         if JxlDecoderSubscribeEvents(dec, events) != JxlDecoderStatus::Success {
-            JxlDecoderDestroy(dec);
             return (None, None);
         }
 
         JxlDecoderSetDecompressBoxes(dec, JxlBool::True);
 
         if JxlDecoderSetInput(dec, data.as_ptr(), data.len()) != JxlDecoderStatus::Success {
-            JxlDecoderDestroy(dec);
             return (None, None);
         }
 
@@ -170,8 +196,6 @@ fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
                 break;
             }
         }
-
-        JxlDecoderDestroy(dec);
     }
 
     (exif, xmp)
@@ -524,6 +548,209 @@ fn jpeg_encode_internal(
 }
 
 // ---------------------------------------------------------------------------
+// JPEG ↔ JXL lossless transcoding (raw jpegxl-sys FFI)
+// ---------------------------------------------------------------------------
+
+/// Lossless transcode: JPEG bytes → JXL bytes.
+/// Uses JxlEncoderStoreJPEGMetadata + JxlEncoderAddJPEGFrame so the original
+/// JPEG can be reconstructed bit-for-bit from the resulting JXL.
+fn jpeg_to_jxl_internal(jpeg_data: &[u8]) -> Result<Vec<u8>, String> {
+    unsafe {
+        // Create thread runner
+        let num_threads = JxlThreadParallelRunnerDefaultNumWorkerThreads();
+        let runner = JxlThreadParallelRunnerCreate(ptr::null(), num_threads);
+        if runner.is_null() {
+            return Err("Failed to create thread runner".into());
+        }
+        let _runner_guard = RunnerGuard(runner);
+
+        // Create encoder
+        let enc = JxlEncoderCreate(ptr::null());
+        if enc.is_null() {
+            return Err("Failed to create JXL encoder".into());
+        }
+        let _enc_guard = EncoderGuard(enc);
+
+        // Set parallel runner
+        if JxlEncoderSetParallelRunner(enc, JxlThreadParallelRunner, runner)
+            != JxlEncoderStatus::Success
+        {
+            return Err("Failed to set parallel runner".into());
+        }
+
+        // Use container format (required for JPEG metadata storage)
+        JxlEncoderUseContainer(enc, JxlBool::True);
+
+        // Enable JPEG reconstruction metadata storage
+        if JxlEncoderStoreJPEGMetadata(enc, JxlBool::True) != JxlEncoderStatus::Success {
+            return Err("Failed to enable JPEG metadata storage".into());
+        }
+
+        // Create frame settings
+        let frame_settings = JxlEncoderFrameSettingsCreate(enc, ptr::null());
+        if frame_settings.is_null() {
+            return Err("Failed to create frame settings".into());
+        }
+
+        // Add the JPEG frame (lossless transcoding)
+        let status = JxlEncoderAddJPEGFrame(frame_settings, jpeg_data.as_ptr(), jpeg_data.len());
+        if status != JxlEncoderStatus::Success {
+            return Err("Failed to add JPEG frame for transcoding".into());
+        }
+
+        // Signal no more frames
+        JxlEncoderCloseInput(enc);
+
+        // Collect output
+        let mut output = Vec::with_capacity(jpeg_data.len());
+        let chunk_size = 65536usize;
+        loop {
+            let offset = output.len();
+            output.resize(offset + chunk_size, 0u8);
+            let mut next_out = output.as_mut_ptr().add(offset);
+            let mut avail_out = chunk_size;
+
+            let status = JxlEncoderProcessOutput(enc, &mut next_out, &mut avail_out);
+            let bytes_written = chunk_size - avail_out;
+            output.truncate(offset + bytes_written);
+
+            match status {
+                JxlEncoderStatus::Success => break,
+                JxlEncoderStatus::NeedMoreOutput => continue,
+                JxlEncoderStatus::Error => {
+                    return Err("JXL encoder error during output".into());
+                }
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+/// Lossless reconstruct: JXL bytes → original JPEG bytes.
+/// Only works for JXL files that were created via lossless JPEG transcoding.
+fn jxl_to_jpeg_internal(jxl_data: &[u8]) -> Result<Vec<u8>, String> {
+    unsafe {
+        let dec = JxlDecoderCreate(ptr::null());
+        if dec.is_null() {
+            return Err("Failed to create JXL decoder".into());
+        }
+        let _dec_guard = DecoderGuard(dec);
+
+        // We must subscribe to FULLIMAGE along with JPEGRECONSTRUCTION.
+        // If we don't subscribe to FULLIMAGE, the decoder stops after metadata.
+        let events = (JxlDecoderStatus::JPEGReconstruction as std::os::raw::c_int)
+            | (JxlDecoderStatus::FullImage as std::os::raw::c_int);
+        if JxlDecoderSubscribeEvents(dec, events) != JxlDecoderStatus::Success {
+            return Err("Failed to subscribe to decoder events".into());
+        }
+
+        // Set input
+        if JxlDecoderSetInput(dec, jxl_data.as_ptr(), jxl_data.len()) != JxlDecoderStatus::Success {
+            return Err("Failed to set decoder input".into());
+        }
+
+        // Initial JPEG buffer — we'll grow it as needed
+        let mut jpeg_buf: Vec<u8> = Vec::with_capacity(jxl_data.len() * 2);
+        jpeg_buf.resize(jpeg_buf.capacity(), 0u8);
+        let mut jpeg_buf_offset = 0usize;
+        let mut got_jpeg_reconstruction = false;
+
+        loop {
+            let status = JxlDecoderProcessInput(dec);
+            match status {
+                JxlDecoderStatus::JPEGReconstruction => {
+                    got_jpeg_reconstruction = true;
+                    // Set the JPEG output buffer
+                    let buf_ptr = jpeg_buf.as_mut_ptr().add(jpeg_buf_offset);
+                    let buf_len = jpeg_buf.len() - jpeg_buf_offset;
+                    if JxlDecoderSetJPEGBuffer(dec, buf_ptr, buf_len) != JxlDecoderStatus::Success {
+                        return Err("Failed to set JPEG output buffer".into());
+                    }
+                }
+                JxlDecoderStatus::JPEGNeedMoreOutput => {
+                    // Release current buffer to find how much was written
+                    let remaining = JxlDecoderReleaseJPEGBuffer(dec);
+                    let written = (jpeg_buf.len() - jpeg_buf_offset) - remaining;
+                    jpeg_buf_offset += written;
+
+                    // Grow the buffer
+                    let new_size = jpeg_buf.len() * 2;
+                    jpeg_buf.resize(new_size, 0u8);
+
+                    // Set buffer again from where we left off
+                    let buf_ptr = jpeg_buf.as_mut_ptr().add(jpeg_buf_offset);
+                    let buf_len = jpeg_buf.len() - jpeg_buf_offset;
+                    if JxlDecoderSetJPEGBuffer(dec, buf_ptr, buf_len) != JxlDecoderStatus::Success {
+                        return Err("Failed to set grown JPEG buffer".into());
+                    }
+                }
+                JxlDecoderStatus::NeedImageOutBuffer => {
+                    // The decoder wants to decode pixels! This happens after metadata.
+                    // If we have JPEG Reconstruction data, we would have received it already.
+                    // So if we reach here, we can stop regardless.
+                    if got_jpeg_reconstruction {
+                        let remaining = JxlDecoderReleaseJPEGBuffer(dec);
+                        let written = (jpeg_buf.len() - jpeg_buf_offset) - remaining;
+                        jpeg_buf_offset += written;
+                        jpeg_buf.truncate(jpeg_buf_offset);
+                    }
+                    break;
+                }
+                JxlDecoderStatus::FullImage | JxlDecoderStatus::Success => {
+                    // Decoder finished processing.
+                    if got_jpeg_reconstruction {
+                        let remaining = JxlDecoderReleaseJPEGBuffer(dec);
+                        let written = (jpeg_buf.len() - jpeg_buf_offset) - remaining;
+                        jpeg_buf_offset += written;
+                        jpeg_buf.truncate(jpeg_buf_offset);
+                    }
+                    break;
+                }
+                JxlDecoderStatus::Error => {
+                    return Err("JXL Decoder error during JPEG reconstruction".into());
+                }
+                JxlDecoderStatus::NeedMoreInput => {
+                    return Err("Incomplete JXL data for JPEG reconstruction".into());
+                }
+                _ => {
+                    // Ignore other events like BasicInfo, ColorEncoding, etc.
+                    // Just let the decoder continue.
+                }
+            }
+        }
+
+        if !got_jpeg_reconstruction || jpeg_buf.is_empty() {
+            return Err("No JPEG reconstruction data found in JXL file".into());
+        }
+
+        Ok(jpeg_buf)
+    }
+}
+
+/// Transcode JPEG bytes to JXL bytes (lossless, bit-exact roundtrip).
+///
+/// The GIL is released during transcoding.
+#[pyfunction]
+fn jpeg_to_jxl<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let jxl = py
+        .allow_threads(|| jpeg_to_jxl_internal(data))
+        .map_err(PyRuntimeError::new_err)?;
+    Ok(PyBytes::new(py, &jxl))
+}
+
+/// Reconstruct the original JPEG from a JXL that was created via lossless transcoding.
+///
+/// The GIL is released during reconstruction.
+#[pyfunction]
+fn jxl_to_jpeg<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let jpeg = py
+        .allow_threads(|| jxl_to_jpeg_internal(data))
+        .map_err(PyRuntimeError::new_err)?;
+    Ok(PyBytes::new(py, &jpeg))
+}
+
+// ---------------------------------------------------------------------------
 // JPEG Python API — bytes
 // ---------------------------------------------------------------------------
 
@@ -643,5 +870,8 @@ fn _pyjpegxl(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jpeg_encode, m)?)?;
     m.add_function(wrap_pyfunction!(jpeg_decode_to_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(jpeg_encode_from_numpy, m)?)?;
+    // JPEG ↔ JXL lossless transcoding
+    m.add_function(wrap_pyfunction!(jpeg_to_jxl, m)?)?;
+    m.add_function(wrap_pyfunction!(jxl_to_jpeg, m)?)?;
     Ok(())
 }
