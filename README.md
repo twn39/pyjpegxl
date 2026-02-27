@@ -8,6 +8,7 @@
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 </div>
+
 Python bindings for **JPEG XL** and **JPEG** encoding/decoding, powered by [libjxl](https://github.com/libjxl/libjxl) and [libjpeg-turbo](https://libjpeg-turbo.org/). Both libraries are statically linked — no system dependencies required.
 
 **Features**:
