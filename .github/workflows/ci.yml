@@ -71,8 +71,6 @@ jobs:
   linux:
     name: Build Linux Wheels
     runs-on: ubuntu-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     needs: test
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -93,8 +91,6 @@ jobs:
   windows:
     name: Build Windows Wheels
     runs-on: windows-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     needs: test
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -114,8 +110,6 @@ jobs:
   macos:
     name: Build macOS Wheels
     runs-on: macos-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     needs: test
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -124,7 +118,6 @@ jobs:
         run: brew install nasm
       - name: Build wheels (universal2)
         uses: PyO3/maturin-action@v1
-        env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         with:
           target: universal2-apple-darwin
@@ -139,8 +132,6 @@ jobs:
   sdist:
     name: Build Source Distribution
     runs-on: ubuntu-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     needs: test
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -159,8 +150,6 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     environment: pypi
     permissions:
       id-token: write  # required for trusted publishing
