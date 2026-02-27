@@ -9,8 +9,8 @@ name = "pyjpegxl"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23.5", features = ["extension-module"] }
+pyo3 = { version = "0.28.2", features = ["extension-module"] }
 jpegxl-rs = { version = "0.13", features = ["vendored"] }
 jpegxl-sys = { version = "0.12.1", features = ["vendored"] }
-numpy = "0.23"
+numpy = "0.28.0"
 turbojpeg = { version = "1.4", default-features = true }
