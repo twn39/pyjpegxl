@@ -42,7 +42,7 @@ define_guard!(DecoderGuard, JxlDecoderDestroy);
 define_guard!(RunnerGuard, JxlThreadParallelRunnerDestroy);
 
 /// Image metadata returned by decode.
-#[pyclass(get_all)]
+#[pyclass(get_all, from_py_object)]
 #[derive(Clone)]
 struct Metadata {
     width: u32,
@@ -64,7 +64,7 @@ impl Metadata {
 }
 
 /// Encoder speed presets (fastest → slowest).
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq)]
 enum EncoderSpeed {
     Lightning = 1,
@@ -303,7 +303,7 @@ fn encode_internal(
 #[pyfunction]
 fn decode<'py>(py: Python<'py>, data: &[u8]) -> PyResult<(Metadata, Bound<'py, PyBytes>)> {
     let result = py
-        .allow_threads(|| decode_internal(data))
+        .detach(|| decode_internal(data))
         .map_err(PyRuntimeError::new_err)?;
     Ok((result.meta, PyBytes::new(py, &result.pixels)))
 }
@@ -326,7 +326,7 @@ fn encode<'py>(
     xmp: Option<&[u8]>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let jxl = py
-        .allow_threads(|| {
+        .detach(|| {
             encode_internal(
                 data,
                 width,
@@ -358,7 +358,7 @@ fn decode_to_numpy<'py>(
     data: &[u8],
 ) -> PyResult<(Metadata, Bound<'py, PyArrayDyn<u8>>)> {
     let result = py
-        .allow_threads(|| decode_internal(data))
+        .detach(|| decode_internal(data))
         .map_err(PyRuntimeError::new_err)?;
 
     let h = result.meta.height as usize;
@@ -408,7 +408,7 @@ fn encode_from_numpy<'py>(
     let data = array_view.as_slice().unwrap();
 
     let jxl = py
-        .allow_threads(|| {
+        .detach(|| {
             encode_internal(
                 data,
                 width,
@@ -431,7 +431,7 @@ fn encode_from_numpy<'py>(
 // ---------------------------------------------------------------------------
 
 /// Simple metadata for decoded JPEG images.
-#[pyclass(get_all)]
+#[pyclass(get_all, from_py_object)]
 #[derive(Clone)]
 struct JpegInfo {
     width: u32,
@@ -734,7 +734,7 @@ fn jxl_to_jpeg_internal(jxl_data: &[u8]) -> Result<Vec<u8>, String> {
 #[pyfunction]
 fn jpeg_to_jxl<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let jxl = py
-        .allow_threads(|| jpeg_to_jxl_internal(data))
+        .detach(|| jpeg_to_jxl_internal(data))
         .map_err(PyRuntimeError::new_err)?;
     Ok(PyBytes::new(py, &jxl))
 }
@@ -745,7 +745,7 @@ fn jpeg_to_jxl<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes
 #[pyfunction]
 fn jxl_to_jpeg<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let jpeg = py
-        .allow_threads(|| jxl_to_jpeg_internal(data))
+        .detach(|| jxl_to_jpeg_internal(data))
         .map_err(PyRuntimeError::new_err)?;
     Ok(PyBytes::new(py, &jpeg))
 }
@@ -761,7 +761,7 @@ fn jxl_to_jpeg<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes
 #[pyfunction]
 fn jpeg_decode<'py>(py: Python<'py>, data: &[u8]) -> PyResult<(JpegInfo, Bound<'py, PyBytes>)> {
     let result = py
-        .allow_threads(|| jpeg_decode_internal(data))
+        .detach(|| jpeg_decode_internal(data))
         .map_err(PyRuntimeError::new_err)?;
     Ok((result.info, PyBytes::new(py, &result.pixels)))
 }
@@ -780,7 +780,7 @@ fn jpeg_encode<'py>(
     num_channels: u32,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let jpeg = py
-        .allow_threads(|| jpeg_encode_internal(data, width, height, quality, num_channels))
+        .detach(|| jpeg_encode_internal(data, width, height, quality, num_channels))
         .map_err(PyRuntimeError::new_err)?;
     Ok(PyBytes::new(py, &jpeg))
 }
@@ -799,7 +799,7 @@ fn jpeg_decode_to_numpy<'py>(
     data: &[u8],
 ) -> PyResult<(JpegInfo, Bound<'py, PyArrayDyn<u8>>)> {
     let result = py
-        .allow_threads(|| jpeg_decode_internal(data))
+        .detach(|| jpeg_decode_internal(data))
         .map_err(PyRuntimeError::new_err)?;
 
     let h = result.info.height as usize;
@@ -842,7 +842,7 @@ fn jpeg_encode_from_numpy<'py>(
     let data = array_view.as_slice().unwrap();
 
     let jpeg = py
-        .allow_threads(|| jpeg_encode_internal(data, width, height, quality, num_channels))
+        .detach(|| jpeg_encode_internal(data, width, height, quality, num_channels))
         .map_err(PyRuntimeError::new_err)?;
 
     Ok(PyBytes::new(py, &jpeg))
