@@ -7,16 +7,13 @@ use pyo3::prelude::*;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 static GLOBAL_NUM_THREADS: AtomicUsize = AtomicUsize::new(0);
 
 #[pyfunction]
 pub fn set_num_threads(n: usize) {
     GLOBAL_NUM_THREADS.store(n, Ordering::SeqCst);
-    if let Ok(mut lock) = get_runner_cache().lock() {
-        *lock = None;
-    }
 }
 
 #[pyfunction]
@@ -67,9 +64,10 @@ impl SharedCRunner {
     }
 }
 
-fn get_runner_cache() -> &'static Mutex<Option<Arc<SharedCRunner>>> {
-    static RUNNER_CACHE: OnceLock<Mutex<Option<Arc<SharedCRunner>>>> = OnceLock::new();
-    RUNNER_CACHE.get_or_init(|| Mutex::new(None))
+use std::cell::RefCell;
+
+thread_local! {
+    static TLS_RUNNER: RefCell<Option<(usize, Arc<SharedCRunner>)>> = const { RefCell::new(None) };
 }
 
 pub fn get_shared_c_runner() -> Option<Arc<SharedCRunner>> {
@@ -78,19 +76,22 @@ pub fn get_shared_c_runner() -> Option<Arc<SharedCRunner>> {
         return None;
     }
 
-    let cache = get_runner_cache();
-    let mut lock = cache.lock().ok()?;
-    if let Some(ref runner) = *lock {
-        return Some(runner.clone());
-    }
-
     let effective = get_effective_threads();
-    let ptr = unsafe { JxlThreadParallelRunnerCreate(ptr::null(), effective) };
-    if ptr.is_null() {
-        return None;
-    }
+    TLS_RUNNER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if let Some((cached_threads, ref runner)) = *borrow {
+            if cached_threads == effective {
+                return Some(runner.clone());
+            }
+        }
 
-    let shared = Arc::new(SharedCRunner { ptr });
-    *lock = Some(shared.clone());
-    Some(shared)
+        let ptr = unsafe { JxlThreadParallelRunnerCreate(ptr::null(), effective) };
+        if ptr.is_null() {
+            return None;
+        }
+
+        let shared = Arc::new(SharedCRunner { ptr });
+        *borrow = Some((effective, shared.clone()));
+        Some(shared)
+    })
 }
