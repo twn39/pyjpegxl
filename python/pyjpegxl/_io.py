@@ -14,10 +14,27 @@ from pyjpegxl._pyjpegxl import (
     EncoderSpeed,
     Metadata,
     decode,
+    decode_into,
     decode_to_numpy,
     encode,
     encode_from_numpy,
+    probe,
 )
+
+
+def probe_file(path: str | os.PathLike) -> Metadata:
+    """Fast metadata inspection of a JXL file without decoding pixel data.
+
+    Executes in sub-millisecond time and allocates zero pixel buffer memory.
+
+    Args:
+        path: Path to the .jxl file.
+
+    Returns:
+        Image Metadata (width, height, channels, alpha, bit depth, HDR nits, ICC/EXIF/XMP).
+    """
+    with open(path, "rb") as f:
+        return probe(f.read())
 
 
 def read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
@@ -50,6 +67,24 @@ def read_to_numpy(path: str | os.PathLike, *, dtype: str | None = None) -> tuple
         return decode_to_numpy(f.read(), dtype=dtype)
 
 
+def read_into(path: str | os.PathLike, out: np.ndarray) -> Metadata:
+    """Read a JXL file and decode directly into a preallocated writable NumPy array.
+
+    Zero-allocation: eliminates output buffer allocation by writing decoded pixels
+    directly into the caller-provided array.
+
+    Args:
+        path: Path to the .jxl file.
+        out: Preallocated writable C-contiguous ndarray of dtype uint8, uint16,
+            or float32, with matching dimensions (H, W) or (H, W, C).
+
+    Returns:
+        Metadata of the decoded image.
+    """
+    with open(path, "rb") as f:
+        return decode_into(f.read(), out)
+
+
 def write(
     path: str | os.PathLike,
     data: bytes,
@@ -63,6 +98,7 @@ def write(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Encode raw pixel data and write it to a JXL file.
 
@@ -78,6 +114,7 @@ def write(
         exif: Optional raw EXIF metadata bytes.
         xmp: Optional raw XMP metadata bytes.
         icc: Optional raw ICC color profile bytes.
+        intensity_target: Optional HDR peak brightness in nits (cd/m²).
 
     Returns:
         Number of bytes written.
@@ -93,6 +130,7 @@ def write(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
     out = os.fspath(path)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -110,6 +148,7 @@ def write_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Encode a NumPy array and write it to a JXL file.
 
@@ -118,13 +157,14 @@ def write_from_numpy(
 
     Args:
         path: Destination file path. Parent directories are created automatically.
-        array: Image as ndarray of shape (H, W, C), dtype uint8, uint16, or float32.
+        array: Image as ndarray of shape (H, W) or (H, W, C), dtype uint8, uint16, or float32.
         lossless: Use lossless compression.
         quality: Encoding quality (0.0–1.0). Ignored when lossless=True.
         speed: Encoder effort preset.
         exif: Optional raw EXIF metadata bytes.
         xmp: Optional raw XMP metadata bytes.
         icc: Optional raw ICC color profile bytes.
+        intensity_target: Optional HDR peak brightness in nits (cd/m²).
 
     Returns:
         Number of bytes written.
@@ -140,6 +180,7 @@ def write_from_numpy(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
     out = os.fspath(path)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

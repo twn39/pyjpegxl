@@ -54,6 +54,37 @@ class JpegInfo:
     num_channels: int
 
 # ===========================================================================
+# Fast Metadata Probing
+# ===========================================================================
+
+def probe(data: bytes) -> Metadata:
+    """Fast metadata inspection without decoding pixel data.
+
+    Executes in sub-millisecond time and allocates zero pixel buffer memory.
+    """
+    ...
+
+def probe_file(path: str | os.PathLike) -> Metadata:
+    """Fast metadata inspection of a JXL file without decoding pixel data."""
+    ...
+
+# ===========================================================================
+# Concurrency & Thread Pool Control
+# ===========================================================================
+
+def set_num_threads(num_threads: int) -> None:
+    """Set global thread count for libjxl encoding/decoding.
+
+    Pass 0 for automatic detection (logical CPU count).
+    Pass 1 for pure single-threaded execution without thread pool overhead.
+    """
+    ...
+
+def get_num_threads() -> int:
+    """Get current global thread count setting (0 = auto)."""
+    ...
+
+# ===========================================================================
 # JXL — Sync bytes API
 # ===========================================================================
 
@@ -74,12 +105,13 @@ def encode(
     xmp: bytes | None = None,
     icc: bytes | None = None,
     dtype: str | None = None,
+    intensity_target: float | None = None,
 ) -> bytes:
     """Encode raw pixel bytes → JXL bytes."""
     ...
 
 # ===========================================================================
-# JXL — Sync NumPy API (zero-copy)
+# JXL — Sync NumPy API (zero-copy & zero-allocation)
 # ===========================================================================
 
 def decode_to_numpy(
@@ -88,6 +120,17 @@ def decode_to_numpy(
     dtype: str | None = None,
 ) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]:
     """Decode JXL bytes → (Metadata, ndarray shape (H,W,C)). Zero-copy."""
+    ...
+
+def decode_into(
+    data: bytes,
+    out: npt.NDArray[np.uint8 | np.uint16 | np.float32],
+) -> Metadata:
+    """Decode JXL bytes directly into preallocated writable NumPy array.
+
+    Zero-allocation: eliminates output buffer allocation.
+    `out` must be a C-contiguous writable ndarray with matching dimensions and dtype.
+    """
     ...
 
 def encode_from_numpy(
@@ -99,8 +142,9 @@ def encode_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> bytes:
-    """Encode ndarray (H,W,C) (uint8, uint16, float32) → JXL bytes."""
+    """Encode ndarray (H,W) or (H,W,C) (uint8, uint16, float32) → JXL bytes."""
     ...
 
 # ===========================================================================
@@ -119,6 +163,13 @@ def read_to_numpy(
     """Read a JXL file → (Metadata, ndarray shape (H,W,C))."""
     ...
 
+def read_into(
+    path: str | os.PathLike,
+    out: npt.NDArray[np.uint8 | np.uint16 | np.float32],
+) -> Metadata:
+    """Read a JXL file and decode directly into preallocated writable NumPy array."""
+    ...
+
 def write(
     path: str | os.PathLike,
     data: bytes,
@@ -133,6 +184,7 @@ def write(
     xmp: bytes | None = None,
     icc: bytes | None = None,
     dtype: str | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Encode raw pixel bytes and write to a JXL file. Returns bytes written."""
     ...
@@ -147,6 +199,7 @@ def write_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Encode ndarray and write to a JXL file. Returns bytes written."""
     ...
@@ -225,7 +278,13 @@ def jpeg_write_from_numpy(
 # JXL — Async wrappers
 # ===========================================================================
 
+async def async_probe(data: bytes) -> Metadata: ...
+async def async_probe_file(path: str | os.PathLike) -> Metadata: ...
 async def async_decode(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, bytes]: ...
+async def async_decode_into(
+    data: bytes,
+    out: npt.NDArray[np.uint8 | np.uint16 | np.float32],
+) -> Metadata: ...
 async def async_encode(
     data: bytes,
     width: int,
@@ -239,6 +298,7 @@ async def async_encode(
     xmp: bytes | None = None,
     icc: bytes | None = None,
     dtype: str | None = None,
+    intensity_target: float | None = None,
 ) -> bytes: ...
 async def async_decode_to_numpy(
     data: bytes,
@@ -254,6 +314,7 @@ async def async_encode_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> bytes: ...
 async def async_read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]: ...
 async def async_read_to_numpy(
@@ -261,6 +322,10 @@ async def async_read_to_numpy(
     *,
     dtype: str | None = None,
 ) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]: ...
+async def async_read_into(
+    path: str | os.PathLike,
+    out: npt.NDArray[np.uint8 | np.uint16 | np.float32],
+) -> Metadata: ...
 async def async_write(
     path: str | os.PathLike,
     data: bytes,
@@ -275,6 +340,7 @@ async def async_write(
     xmp: bytes | None = None,
     icc: bytes | None = None,
     dtype: str | None = None,
+    intensity_target: float | None = None,
 ) -> int: ...
 async def async_write_from_numpy(
     path: str | os.PathLike,
@@ -286,6 +352,7 @@ async def async_write_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int: ...
 
 # ===========================================================================

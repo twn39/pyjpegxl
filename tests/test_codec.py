@@ -183,9 +183,23 @@ class TestNumPy:
             pyjpegxl.encode_from_numpy(arr_f)
 
     def test_encode_wrong_ndim_raises(self):
-        arr_2d = np.zeros((10, 10), dtype=np.uint8)
-        with pytest.raises(RuntimeError, match="3D"):
-            pyjpegxl.encode_from_numpy(arr_2d)
+        arr_1d = np.zeros((10,), dtype=np.uint8)
+        with pytest.raises(RuntimeError, match="2D.*3D"):
+            pyjpegxl.encode_from_numpy(arr_1d)
+        arr_4d = np.zeros((2, 2, 2, 2), dtype=np.uint8)
+        with pytest.raises(RuntimeError, match="2D.*3D"):
+            pyjpegxl.encode_from_numpy(arr_4d)
+
+    def test_encode_2d_grayscale(self):
+        arr_2d = np.full((16, 16), 128, dtype=np.uint8)
+        jxl = pyjpegxl.encode_from_numpy(arr_2d, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        meta, decoded = pyjpegxl.decode_to_numpy(jxl)
+        assert meta.width == 16
+        assert meta.height == 16
+        assert meta.num_color_channels == 1
+        assert not meta.has_alpha
+        assert decoded.shape == (16, 16, 1)
+        assert np.array_equal(decoded[:, :, 0], arr_2d)
 
     def test_numpy_array_writable(self, real_image_data):
         """Decoded numpy array should be writable (owned, not read-only)."""
@@ -584,3 +598,141 @@ class TestHighBitDepthAndIcc:
         assert dec_read.dtype == np.uint16
         assert meta_read.icc == dummy_icc
         assert np.array_equal(arr, dec_read)
+
+
+class TestPerformanceAndConcurrency:
+    """Tests for lightweight probing, zero-allocation decode_into, thread pool control, and intensity_target."""
+
+    def test_probe_and_probe_file(self, real_image_data, tmp_path):
+        _, _, jxl_bytes = real_image_data
+        jxl_file = tmp_path / "probe_test.jxl"
+        jxl_file.write_bytes(jxl_bytes)
+
+        # Full decode metadata
+        full_meta, _ = pyjpegxl.decode(jxl_bytes)
+
+        # Probe bytes
+        probe_meta = pyjpegxl.probe(jxl_bytes)
+        assert probe_meta.width == full_meta.width
+        assert probe_meta.height == full_meta.height
+        assert probe_meta.num_color_channels == full_meta.num_color_channels
+        assert probe_meta.has_alpha == full_meta.has_alpha
+        assert probe_meta.bits_per_sample == full_meta.bits_per_sample
+
+        # Probe file
+        file_meta = pyjpegxl.probe_file(jxl_file)
+        assert file_meta.width == full_meta.width
+        assert file_meta.height == full_meta.height
+        assert file_meta.bits_per_sample == full_meta.bits_per_sample
+
+    def test_decode_into_uint8(self, real_image_data, tmp_path):
+        _, expected_arr, jxl_bytes = real_image_data
+        jxl_file = tmp_path / "decode_into.jxl"
+        jxl_file.write_bytes(jxl_bytes)
+
+        h, w, c = expected_arr.shape
+        out = np.zeros((h, w, c), dtype=np.uint8)
+
+        meta = pyjpegxl.decode_into(jxl_bytes, out)
+        assert meta.width == w
+        assert meta.height == h
+        assert np.array_equal(out, expected_arr)
+
+        # Test read_into
+        out_file = np.zeros((h, w, c), dtype=np.uint8)
+        meta_file = pyjpegxl.read_into(jxl_file, out_file)
+        assert meta_file.width == w
+        assert np.array_equal(out_file, expected_arr)
+
+    def test_decode_into_uint16_and_float32(self):
+        rng = np.random.default_rng(123)
+        # 16-bit
+        arr16 = rng.integers(0, 65536, size=(16, 16, 3), dtype=np.uint16)
+        jxl16 = pyjpegxl.encode_from_numpy(arr16, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        out16 = np.zeros_like(arr16)
+        meta16 = pyjpegxl.decode_into(jxl16, out16)
+        assert meta16.bits_per_sample == 16
+        assert np.array_equal(out16, arr16)
+
+        # float32
+        arr_f32 = rng.random(size=(16, 16, 3), dtype=np.float32)
+        jxl_f32 = pyjpegxl.encode_from_numpy(arr_f32, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        out_f32 = np.zeros_like(arr_f32)
+        meta_f32 = pyjpegxl.decode_into(jxl_f32, out_f32)
+        assert meta_f32.bits_per_sample == 32
+        assert np.allclose(out_f32, arr_f32, atol=1e-4)
+
+    def test_decode_into_buffer_mismatch_raises(self, real_image_data):
+        _, expected_arr, jxl_bytes = real_image_data
+        h, w, c = expected_arr.shape
+
+        # Wrong size
+        too_small = np.zeros((h // 2, w // 2, c), dtype=np.uint8)
+        with pytest.raises(RuntimeError):
+            pyjpegxl.decode_into(jxl_bytes, too_small)
+
+        # Wrong dtype
+        wrong_dtype = np.zeros((h, w, c), dtype=np.int32)
+        with pytest.raises(TypeError):
+            pyjpegxl.decode_into(jxl_bytes, wrong_dtype)
+
+    def test_set_and_get_num_threads(self, real_image_data):
+        _, expected_arr, jxl_bytes = real_image_data
+        # Test getting initial setting
+        initial_threads = pyjpegxl.get_num_threads()
+        assert isinstance(initial_threads, int)
+
+        try:
+            # Test pure single-threaded mode (runner bypass)
+            pyjpegxl.set_num_threads(1)
+            assert pyjpegxl.get_num_threads() == 1
+            meta1, dec1 = pyjpegxl.decode_to_numpy(jxl_bytes)
+            assert meta1.width == expected_arr.shape[1]
+
+            # Test explicit multi-threaded mode
+            pyjpegxl.set_num_threads(2)
+            assert pyjpegxl.get_num_threads() == 2
+            meta2, dec2 = pyjpegxl.decode_to_numpy(jxl_bytes)
+            assert np.array_equal(dec1, dec2)
+
+            # Test auto mode
+            pyjpegxl.set_num_threads(0)
+            assert pyjpegxl.get_num_threads() == 0
+        finally:
+            pyjpegxl.set_num_threads(initial_threads)
+
+    def test_intensity_target_encoding(self):
+        arr = np.full((16, 16, 3), 128, dtype=np.uint8)
+        jxl = pyjpegxl.encode_from_numpy(
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            intensity_target=1000.0,
+        )
+        meta = pyjpegxl.probe(jxl)
+        assert meta.intensity_target == pytest.approx(1000.0, rel=1e-1)
+
+    @pytest.mark.asyncio
+    async def test_async_probe_and_decode_into(self, real_image_data, tmp_path):
+        _, expected_arr, jxl_bytes = real_image_data
+        jxl_file = tmp_path / "async_perf.jxl"
+        jxl_file.write_bytes(jxl_bytes)
+
+        # Async probe
+        meta1 = await pyjpegxl.async_probe(jxl_bytes)
+        assert meta1.width == expected_arr.shape[1]
+
+        meta2 = await pyjpegxl.async_probe_file(jxl_file)
+        assert meta2.width == expected_arr.shape[1]
+
+        # Async decode_into
+        out = np.zeros_like(expected_arr)
+        meta3 = await pyjpegxl.async_decode_into(jxl_bytes, out)
+        assert meta3.height == expected_arr.shape[0]
+        assert np.array_equal(out, expected_arr)
+
+        # Async read_into
+        out_file = np.zeros_like(expected_arr)
+        meta4 = await pyjpegxl.async_read_into(jxl_file, out_file)
+        assert meta4.height == expected_arr.shape[0]
+        assert np.array_equal(out_file, expected_arr)

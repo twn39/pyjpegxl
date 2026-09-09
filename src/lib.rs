@@ -3,28 +3,59 @@
 use jpegxl_rs::decode::Pixels;
 use jpegxl_rs::encode::{EncoderFrame, EncoderSpeed as JxlEncoderSpeed};
 use jpegxl_rs::{decoder_builder, encoder_builder, ThreadsRunner};
-use numpy::{ndarray, IntoPyArray, PyArrayDyn, PyReadonlyArrayDyn, PyUntypedArrayMethods};
+use numpy::{
+    ndarray, IntoPyArray, PyArrayDyn, PyReadonlyArrayDyn, PyReadwriteArrayDyn,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use jpegxl_sys::common::types::JxlBool;
+use jpegxl_sys::common::types::{JxlBool, JxlDataType, JxlEndianness, JxlPixelFormat};
 use jpegxl_sys::decode::{
-    JxlDecoderCreate, JxlDecoderDestroy, JxlDecoderGetBoxSizeRaw, JxlDecoderGetBoxType,
-    JxlDecoderProcessInput, JxlDecoderReleaseBoxBuffer, JxlDecoderReleaseJPEGBuffer,
-    JxlDecoderSetBoxBuffer, JxlDecoderSetDecompressBoxes, JxlDecoderSetInput,
-    JxlDecoderSetJPEGBuffer, JxlDecoderStatus, JxlDecoderSubscribeEvents,
+    JxlColorProfileTarget, JxlDecoderCreate, JxlDecoderDestroy, JxlDecoderGetBasicInfo,
+    JxlDecoderGetBoxSizeRaw, JxlDecoderGetBoxType, JxlDecoderGetColorAsICCProfile,
+    JxlDecoderGetICCProfileSize, JxlDecoderImageOutBufferSize, JxlDecoderProcessInput,
+    JxlDecoderReleaseBoxBuffer, JxlDecoderReleaseJPEGBuffer, JxlDecoderSetBoxBuffer,
+    JxlDecoderSetDecompressBoxes, JxlDecoderSetImageOutBuffer, JxlDecoderSetInput,
+    JxlDecoderSetJPEGBuffer, JxlDecoderSetParallelRunner, JxlDecoderStatus,
+    JxlDecoderSubscribeEvents,
 };
 use jpegxl_sys::encoder::encode::{
     JxlEncoderAddJPEGFrame, JxlEncoderCloseInput, JxlEncoderCreate, JxlEncoderDestroy,
     JxlEncoderFrameSettingsCreate, JxlEncoderProcessOutput, JxlEncoderSetParallelRunner,
     JxlEncoderStatus, JxlEncoderStoreJPEGMetadata, JxlEncoderUseContainer,
 };
+use jpegxl_sys::metadata::codestream_header::JxlBasicInfo;
 use jpegxl_sys::threads::thread_parallel_runner::{
     JxlThreadParallelRunner, JxlThreadParallelRunnerCreate,
     JxlThreadParallelRunnerDefaultNumWorkerThreads, JxlThreadParallelRunnerDestroy,
 };
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static GLOBAL_NUM_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+#[pyfunction]
+fn set_num_threads(n: usize) {
+    GLOBAL_NUM_THREADS.store(n, Ordering::SeqCst);
+}
+
+#[pyfunction]
+fn get_num_threads() -> usize {
+    GLOBAL_NUM_THREADS.load(Ordering::SeqCst)
+}
+
+fn get_runner() -> Option<ThreadsRunner<'static>> {
+    let threads = GLOBAL_NUM_THREADS.load(Ordering::Relaxed);
+    if threads == 1 {
+        None
+    } else if threads > 1 {
+        ThreadsRunner::new(None, Some(threads))
+    } else {
+        Some(ThreadsRunner::default())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // RAII Guards for jpegxl-sys FFI types to prevent memory leaks on panic
@@ -131,7 +162,6 @@ enum AutoDecodeResult {
     Float(DecodeResult<f32>),
 }
 
-
 fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
     let mut exif = None;
     let mut xmp = None;
@@ -211,15 +241,12 @@ fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Ve
                     current_box_offset += written;
 
                     // Grow buffer dynamically
-                    let new_size =
-                        (current_box_data.len() * 2).max(current_box_data.len() + 65536);
+                    let new_size = (current_box_data.len() * 2).max(current_box_data.len() + 65536);
                     current_box_data.resize(new_size, 0);
 
                     let buf_ptr = current_box_data.as_mut_ptr().add(current_box_offset);
                     let buf_len = current_box_data.len() - current_box_offset;
-                    if JxlDecoderSetBoxBuffer(dec, buf_ptr, buf_len)
-                        != JxlDecoderStatus::Success
-                    {
+                    if JxlDecoderSetBoxBuffer(dec, buf_ptr, buf_len) != JxlDecoderStatus::Success {
                         getting_box = false;
                     }
                 }
@@ -252,13 +279,429 @@ fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Ve
     (exif, xmp, icc)
 }
 
+fn probe_internal(data: &[u8]) -> Result<Metadata, String> {
+    unsafe {
+        let dec = JxlDecoderCreate(ptr::null());
+        if dec.is_null() {
+            return Err("Failed to create JXL decoder".into());
+        }
+        let _dec_guard = DecoderGuard(dec);
+
+        let events = (JxlDecoderStatus::BasicInfo as std::os::raw::c_int)
+            | (JxlDecoderStatus::ColorEncoding as std::os::raw::c_int)
+            | (JxlDecoderStatus::Box as std::os::raw::c_int)
+            | (JxlDecoderStatus::BoxComplete as std::os::raw::c_int);
+        if JxlDecoderSubscribeEvents(dec, events) != JxlDecoderStatus::Success {
+            return Err("Failed to subscribe to decoder events".into());
+        }
+
+        JxlDecoderSetDecompressBoxes(dec, JxlBool::True);
+
+        if JxlDecoderSetInput(dec, data.as_ptr(), data.len()) != JxlDecoderStatus::Success {
+            return Err("Failed to set decoder input".into());
+        }
+
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut num_color_channels = 3u32;
+        let mut has_alpha = false;
+        let mut bits_per_sample = 8u32;
+        let mut intensity_target = 255.0f32;
+        let mut min_nits = 0.0f32;
+
+        let mut exif = None;
+        let mut xmp = None;
+        let mut icc_box = None;
+        let mut decoder_icc = None;
+
+        let mut current_box_type = [0u8; 4];
+        let mut current_box_data = Vec::new();
+        let mut current_box_offset = 0usize;
+        let mut getting_box = false;
+
+        loop {
+            let status = JxlDecoderProcessInput(dec);
+            match status {
+                JxlDecoderStatus::BasicInfo => {
+                    let mut basic_info = std::mem::MaybeUninit::<JxlBasicInfo>::uninit();
+                    if JxlDecoderGetBasicInfo(dec, basic_info.as_mut_ptr())
+                        == JxlDecoderStatus::Success
+                    {
+                        let info = basic_info.assume_init();
+                        width = info.xsize;
+                        height = info.ysize;
+                        num_color_channels = info.num_color_channels;
+                        has_alpha = info.alpha_bits > 0;
+                        bits_per_sample = info.bits_per_sample;
+                        intensity_target = info.intensity_target;
+                        min_nits = info.min_nits;
+                    }
+                }
+                JxlDecoderStatus::ColorEncoding => {
+                    let mut icc_size = 0usize;
+                    if JxlDecoderGetICCProfileSize(dec, JxlColorProfileTarget::Data, &mut icc_size)
+                        == JxlDecoderStatus::Success
+                        && icc_size > 0
+                    {
+                        let mut icc_buf = vec![0u8; icc_size];
+                        if JxlDecoderGetColorAsICCProfile(
+                            dec,
+                            JxlColorProfileTarget::Data,
+                            icc_buf.as_mut_ptr(),
+                            icc_size,
+                        ) == JxlDecoderStatus::Success
+                        {
+                            decoder_icc = Some(icc_buf);
+                        }
+                    }
+                }
+                JxlDecoderStatus::Box => {
+                    let mut box_type = jpegxl_sys::common::types::JxlBoxType([0; 4]);
+                    if JxlDecoderGetBoxType(dec, &mut box_type, JxlBool::True)
+                        == JxlDecoderStatus::Success
+                    {
+                        current_box_type = [
+                            box_type.0[0] as u8,
+                            box_type.0[1] as u8,
+                            box_type.0[2] as u8,
+                            box_type.0[3] as u8,
+                        ];
+
+                        if &current_box_type == b"Exif"
+                            || &current_box_type == b"xml "
+                            || &current_box_type == b"prof"
+                        {
+                            let mut size = 0;
+                            let initial_size = if JxlDecoderGetBoxSizeRaw(dec, &mut size)
+                                == JxlDecoderStatus::Success
+                                && size > 0
+                            {
+                                size as usize
+                            } else {
+                                65536
+                            };
+                            current_box_data.resize(initial_size, 0);
+                            current_box_offset = 0;
+                            if JxlDecoderSetBoxBuffer(
+                                dec,
+                                current_box_data.as_mut_ptr(),
+                                initial_size,
+                            ) == JxlDecoderStatus::Success
+                            {
+                                getting_box = true;
+                            }
+                        }
+                    }
+                }
+                JxlDecoderStatus::BoxNeedMoreOutput if getting_box => {
+                    let remaining = JxlDecoderReleaseBoxBuffer(dec);
+                    let written = (current_box_data.len() - current_box_offset) - remaining;
+                    current_box_offset += written;
+                    let new_size = (current_box_data.len() * 2).max(current_box_data.len() + 65536);
+                    current_box_data.resize(new_size, 0);
+                    let buf_ptr = current_box_data.as_mut_ptr().add(current_box_offset);
+                    let buf_len = current_box_data.len() - current_box_offset;
+                    if JxlDecoderSetBoxBuffer(dec, buf_ptr, buf_len) != JxlDecoderStatus::Success {
+                        getting_box = false;
+                    }
+                }
+                JxlDecoderStatus::BoxComplete if getting_box => {
+                    let released = JxlDecoderReleaseBoxBuffer(dec);
+                    let written =
+                        (current_box_data.len() - current_box_offset).saturating_sub(released);
+                    current_box_offset += written;
+                    current_box_data.truncate(current_box_offset);
+
+                    if &current_box_type == b"Exif" {
+                        exif = Some(current_box_data.clone());
+                    } else if &current_box_type == b"xml " {
+                        xmp = Some(current_box_data.clone());
+                    } else if &current_box_type == b"prof" {
+                        icc_box = Some(current_box_data.clone());
+                    }
+                    getting_box = false;
+                }
+                JxlDecoderStatus::NeedImageOutBuffer
+                | JxlDecoderStatus::FullImage
+                | JxlDecoderStatus::Success => {
+                    break;
+                }
+                JxlDecoderStatus::Error => {
+                    return Err("JXL decoder error during probe".into());
+                }
+                JxlDecoderStatus::NeedMoreInput => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if width == 0 || height == 0 {
+            return Err("Failed to parse basic image information".into());
+        }
+
+        let final_icc = icc_box.or(decoder_icc);
+
+        Ok(Metadata {
+            width,
+            height,
+            num_color_channels,
+            has_alpha,
+            exif,
+            xmp,
+            icc: final_icc,
+            bits_per_sample,
+            intensity_target,
+            min_nits,
+        })
+    }
+}
+
+fn decode_into_internal(
+    data: &[u8],
+    out_ptr: *mut u8,
+    out_byte_len: usize,
+    data_type: JxlDataType,
+    expected_channels: u32,
+    expected_w: u32,
+    expected_h: u32,
+) -> Result<Metadata, String> {
+    unsafe {
+        let dec = JxlDecoderCreate(ptr::null());
+        if dec.is_null() {
+            return Err("Failed to create JXL decoder".into());
+        }
+        let _dec_guard = DecoderGuard(dec);
+
+        let num_threads = GLOBAL_NUM_THREADS.load(Ordering::Relaxed);
+        let mut _runner_guard = None;
+        if num_threads != 1 {
+            let workers = if num_threads > 1 {
+                num_threads
+            } else {
+                JxlThreadParallelRunnerDefaultNumWorkerThreads()
+            };
+            let runner = JxlThreadParallelRunnerCreate(ptr::null(), workers);
+            if !runner.is_null() {
+                JxlDecoderSetParallelRunner(dec, JxlThreadParallelRunner, runner);
+                _runner_guard = Some(RunnerGuard(runner));
+            }
+        }
+
+        let events = (JxlDecoderStatus::BasicInfo as std::os::raw::c_int)
+            | (JxlDecoderStatus::ColorEncoding as std::os::raw::c_int)
+            | (JxlDecoderStatus::Box as std::os::raw::c_int)
+            | (JxlDecoderStatus::BoxComplete as std::os::raw::c_int)
+            | (JxlDecoderStatus::FullImage as std::os::raw::c_int);
+        if JxlDecoderSubscribeEvents(dec, events) != JxlDecoderStatus::Success {
+            return Err("Failed to subscribe to decoder events".into());
+        }
+
+        JxlDecoderSetDecompressBoxes(dec, JxlBool::True);
+
+        if JxlDecoderSetInput(dec, data.as_ptr(), data.len()) != JxlDecoderStatus::Success {
+            return Err("Failed to set decoder input".into());
+        }
+
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut num_color_channels = 3u32;
+        let mut has_alpha = false;
+        let mut bits_per_sample = 8u32;
+        let mut intensity_target = 255.0f32;
+        let mut min_nits = 0.0f32;
+
+        let mut exif = None;
+        let mut xmp = None;
+        let mut icc_box = None;
+        let mut decoder_icc = None;
+
+        let mut current_box_type = [0u8; 4];
+        let mut current_box_data = Vec::new();
+        let mut current_box_offset = 0usize;
+        let mut getting_box = false;
+        let mut buffer_set = false;
+
+        loop {
+            let status = JxlDecoderProcessInput(dec);
+            match status {
+                JxlDecoderStatus::BasicInfo => {
+                    let mut basic_info = std::mem::MaybeUninit::<JxlBasicInfo>::uninit();
+                    if JxlDecoderGetBasicInfo(dec, basic_info.as_mut_ptr())
+                        == JxlDecoderStatus::Success
+                    {
+                        let info = basic_info.assume_init();
+                        width = info.xsize;
+                        height = info.ysize;
+                        num_color_channels = info.num_color_channels;
+                        has_alpha = info.alpha_bits > 0;
+                        bits_per_sample = info.bits_per_sample;
+                        intensity_target = info.intensity_target;
+                        min_nits = info.min_nits;
+
+                        if width != expected_w || height != expected_h {
+                            return Err(format!(
+                                "Image dimensions ({}x{}) do not match buffer dimensions ({}x{})",
+                                width, height, expected_w, expected_h
+                            ));
+                        }
+                    }
+                }
+                JxlDecoderStatus::ColorEncoding => {
+                    let mut icc_size = 0usize;
+                    if JxlDecoderGetICCProfileSize(dec, JxlColorProfileTarget::Data, &mut icc_size)
+                        == JxlDecoderStatus::Success
+                        && icc_size > 0
+                    {
+                        let mut icc_buf = vec![0u8; icc_size];
+                        if JxlDecoderGetColorAsICCProfile(
+                            dec,
+                            JxlColorProfileTarget::Data,
+                            icc_buf.as_mut_ptr(),
+                            icc_size,
+                        ) == JxlDecoderStatus::Success
+                        {
+                            decoder_icc = Some(icc_buf);
+                        }
+                    }
+                }
+                JxlDecoderStatus::Box => {
+                    let mut box_type = jpegxl_sys::common::types::JxlBoxType([0; 4]);
+                    if JxlDecoderGetBoxType(dec, &mut box_type, JxlBool::True)
+                        == JxlDecoderStatus::Success
+                    {
+                        current_box_type = [
+                            box_type.0[0] as u8,
+                            box_type.0[1] as u8,
+                            box_type.0[2] as u8,
+                            box_type.0[3] as u8,
+                        ];
+
+                        if &current_box_type == b"Exif"
+                            || &current_box_type == b"xml "
+                            || &current_box_type == b"prof"
+                        {
+                            let mut size = 0;
+                            let initial_size = if JxlDecoderGetBoxSizeRaw(dec, &mut size)
+                                == JxlDecoderStatus::Success
+                                && size > 0
+                            {
+                                size as usize
+                            } else {
+                                65536
+                            };
+                            current_box_data.resize(initial_size, 0);
+                            current_box_offset = 0;
+                            if JxlDecoderSetBoxBuffer(
+                                dec,
+                                current_box_data.as_mut_ptr(),
+                                initial_size,
+                            ) == JxlDecoderStatus::Success
+                            {
+                                getting_box = true;
+                            }
+                        }
+                    }
+                }
+                JxlDecoderStatus::BoxNeedMoreOutput if getting_box => {
+                    let remaining = JxlDecoderReleaseBoxBuffer(dec);
+                    let written = (current_box_data.len() - current_box_offset) - remaining;
+                    current_box_offset += written;
+                    let new_size = (current_box_data.len() * 2).max(current_box_data.len() + 65536);
+                    current_box_data.resize(new_size, 0);
+                    let buf_ptr = current_box_data.as_mut_ptr().add(current_box_offset);
+                    let buf_len = current_box_data.len() - current_box_offset;
+                    if JxlDecoderSetBoxBuffer(dec, buf_ptr, buf_len) != JxlDecoderStatus::Success {
+                        getting_box = false;
+                    }
+                }
+                JxlDecoderStatus::BoxComplete if getting_box => {
+                    let released = JxlDecoderReleaseBoxBuffer(dec);
+                    let written =
+                        (current_box_data.len() - current_box_offset).saturating_sub(released);
+                    current_box_offset += written;
+                    current_box_data.truncate(current_box_offset);
+
+                    if &current_box_type == b"Exif" {
+                        exif = Some(current_box_data.clone());
+                    } else if &current_box_type == b"xml " {
+                        xmp = Some(current_box_data.clone());
+                    } else if &current_box_type == b"prof" {
+                        icc_box = Some(current_box_data.clone());
+                    }
+                    getting_box = false;
+                }
+                JxlDecoderStatus::NeedImageOutBuffer => {
+                    let format = JxlPixelFormat {
+                        num_channels: expected_channels,
+                        data_type,
+                        endianness: JxlEndianness::Native,
+                        align: 0,
+                    };
+                    let mut required_size = 0usize;
+                    if JxlDecoderImageOutBufferSize(dec, &format, &mut required_size)
+                        != JxlDecoderStatus::Success
+                    {
+                        return Err("Failed to calculate image output buffer size".into());
+                    }
+                    if out_byte_len < required_size {
+                        return Err(format!(
+                            "Buffer size too small: provided {} bytes, need {} bytes",
+                            out_byte_len, required_size
+                        ));
+                    }
+                    if JxlDecoderSetImageOutBuffer(dec, &format, out_ptr as *mut _, out_byte_len)
+                        != JxlDecoderStatus::Success
+                    {
+                        return Err("Failed to set image output buffer".into());
+                    }
+                    buffer_set = true;
+                }
+                JxlDecoderStatus::FullImage | JxlDecoderStatus::Success => {
+                    break;
+                }
+                JxlDecoderStatus::Error => {
+                    return Err("JXL decoder error during decode_into".into());
+                }
+                JxlDecoderStatus::NeedMoreInput => {
+                    return Err("Incomplete JXL data".into());
+                }
+                _ => {}
+            }
+        }
+
+        if !buffer_set {
+            return Err("Decoder did not produce image frames".into());
+        }
+
+        let final_icc = icc_box.or(decoder_icc);
+
+        Ok(Metadata {
+            width,
+            height,
+            num_color_channels,
+            has_alpha,
+            exif,
+            xmp,
+            icc: final_icc,
+            bits_per_sample,
+            intensity_target,
+            min_nits,
+        })
+    }
+}
+
 fn decode_auto(data: &[u8]) -> Result<AutoDecodeResult, String> {
-    let runner = ThreadsRunner::default();
-    let decoder = decoder_builder()
-        .parallel_runner(&runner)
-        .icc_profile(true)
-        .build()
-        .map_err(|e| format!("Failed to create decoder: {e}"))?;
+    let runner = get_runner();
+    let decoder = if let Some(ref r) = runner {
+        decoder_builder()
+            .parallel_runner(r)
+            .icc_profile(true)
+            .build()
+    } else {
+        decoder_builder().icc_profile(true).build()
+    }
+    .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
     let (meta, pixels) = decoder
         .decode(data)
@@ -318,12 +761,16 @@ fn decode_auto(data: &[u8]) -> Result<AutoDecodeResult, String> {
 macro_rules! impl_decode_internal {
     ($fn_name:ident, $t:ty, $bits:expr) => {
         fn $fn_name(data: &[u8]) -> Result<DecodeResult<$t>, String> {
-            let runner = ThreadsRunner::default();
-            let decoder = decoder_builder()
-                .parallel_runner(&runner)
-                .icc_profile(true)
-                .build()
-                .map_err(|e| format!("Failed to create decoder: {e}"))?;
+            let runner = get_runner();
+            let decoder = if let Some(ref r) = runner {
+                decoder_builder()
+                    .parallel_runner(r)
+                    .icc_profile(true)
+                    .build()
+            } else {
+                decoder_builder().icc_profile(true).build()
+            }
+            .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
             let (meta, pixel_data) = decoder
                 .decode_with::<$t>(data)
@@ -360,7 +807,7 @@ impl_decode_internal!(decode_internal_u16, u16, 16);
 impl_decode_internal!(decode_internal_f32, f32, 32);
 
 macro_rules! impl_encode_internal {
-    ($fn_name:ident, $t:ty) => {
+    ($fn_name:ident, $t:ty, $luma_encoding:expr) => {
         fn $fn_name(
             data: &[$t],
             width: u32,
@@ -372,6 +819,7 @@ macro_rules! impl_encode_internal {
             exif: Option<&[u8]>,
             xmp: Option<&[u8]>,
             icc: Option<&[u8]>,
+            intensity_target: Option<f32>,
         ) -> Result<Vec<u8>, String> {
             let expected_len = (width * height * num_channels) as usize;
             if data.len() != expected_len {
@@ -387,13 +835,24 @@ macro_rules! impl_encode_internal {
 
             let has_alpha = num_channels == 2 || num_channels == 4;
 
-            let runner = ThreadsRunner::default();
-            let mut encoder = encoder_builder()
-                .parallel_runner(&runner)
-                .speed(speed.into())
-                .has_alpha(has_alpha)
-                .build()
-                .map_err(|e| format!("Failed to create encoder: {e}"))?;
+            let runner = get_runner();
+            let mut encoder = if let Some(ref r) = runner {
+                encoder_builder()
+                    .parallel_runner(r)
+                    .speed(speed.into())
+                    .has_alpha(has_alpha)
+                    .build()
+            } else {
+                encoder_builder()
+                    .speed(speed.into())
+                    .has_alpha(has_alpha)
+                    .build()
+            }
+            .map_err(|e| format!("Failed to create encoder: {e}"))?;
+
+            if num_channels == 1 || num_channels == 2 {
+                encoder.color_encoding = Some($luma_encoding);
+            }
 
             if lossless {
                 encoder.lossless = Some(true);
@@ -401,6 +860,10 @@ macro_rules! impl_encode_internal {
                 encoder.quality = 0.0;
             } else {
                 encoder.quality = quality;
+            }
+
+            if let Some(it) = intensity_target {
+                encoder.target_intensity = Some(it);
             }
 
             if let Some(e) = exif {
@@ -429,9 +892,21 @@ macro_rules! impl_encode_internal {
     };
 }
 
-impl_encode_internal!(encode_internal_u8, u8);
-impl_encode_internal!(encode_internal_u16, u16);
-impl_encode_internal!(encode_internal_f32, f32);
+impl_encode_internal!(
+    encode_internal_u8,
+    u8,
+    jpegxl_rs::encode::ColorEncoding::SrgbLuma
+);
+impl_encode_internal!(
+    encode_internal_u16,
+    u16,
+    jpegxl_rs::encode::ColorEncoding::SrgbLuma
+);
+impl_encode_internal!(
+    encode_internal_f32,
+    f32,
+    jpegxl_rs::encode::ColorEncoding::LinearSrgbLuma
+);
 
 // ---------------------------------------------------------------------------
 // Python API — bytes
@@ -482,11 +957,103 @@ fn decode<'py>(
     }
 }
 
+/// Probe a JPEG XL image to extract metadata without decoding pixel data.
+///
+/// Fast execution (< 0.5ms) with zero pixel buffer allocation.
+/// The GIL is released during probing.
+#[pyfunction]
+fn probe<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Metadata> {
+    py.detach(|| probe_internal(data))
+        .map_err(PyRuntimeError::new_err)
+}
+
+/// Decode a JPEG XL image directly into a pre-allocated, writable, C-contiguous NumPy array.
+///
+/// Eliminates intermediate buffer allocation (zero-copy into caller's memory).
+/// The GIL is released during decoding.
+#[pyfunction]
+fn decode_into<'py>(py: Python<'py>, data: &[u8], out: &Bound<'py, PyAny>) -> PyResult<Metadata> {
+    if let Ok(mut arr_u8) = out.extract::<PyReadwriteArrayDyn<'py, u8>>() {
+        let shape = arr_u8.shape();
+        let (h, w, c) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
+            return Err(PyRuntimeError::new_err(
+                "Destination array must be 2D or 3D",
+            ));
+        };
+
+        let slice = arr_u8.as_slice_mut().map_err(|_| {
+            PyRuntimeError::new_err("Destination array must be C-contiguous and writable")
+        })?;
+        let ptr_addr = slice.as_mut_ptr() as usize;
+        let byte_len = std::mem::size_of_val(slice);
+
+        py.detach(move || {
+            let ptr = ptr_addr as *mut u8;
+            decode_into_internal(data, ptr, byte_len, JxlDataType::Uint8, c, w, h)
+        })
+        .map_err(PyRuntimeError::new_err)
+    } else if let Ok(mut arr_u16) = out.extract::<PyReadwriteArrayDyn<'py, u16>>() {
+        let shape = arr_u16.shape();
+        let (h, w, c) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
+            return Err(PyRuntimeError::new_err(
+                "Destination array must be 2D or 3D",
+            ));
+        };
+
+        let slice = arr_u16.as_slice_mut().map_err(|_| {
+            PyRuntimeError::new_err("Destination array must be C-contiguous and writable")
+        })?;
+        let ptr_addr = slice.as_mut_ptr() as usize;
+        let byte_len = std::mem::size_of_val(slice);
+
+        py.detach(move || {
+            let ptr = ptr_addr as *mut u8;
+            decode_into_internal(data, ptr, byte_len, JxlDataType::Uint16, c, w, h)
+        })
+        .map_err(PyRuntimeError::new_err)
+    } else if let Ok(mut arr_f32) = out.extract::<PyReadwriteArrayDyn<'py, f32>>() {
+        let shape = arr_f32.shape();
+        let (h, w, c) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
+            return Err(PyRuntimeError::new_err(
+                "Destination array must be 2D or 3D",
+            ));
+        };
+
+        let slice = arr_f32.as_slice_mut().map_err(|_| {
+            PyRuntimeError::new_err("Destination array must be C-contiguous and writable")
+        })?;
+        let ptr_addr = slice.as_mut_ptr() as usize;
+        let byte_len = std::mem::size_of_val(slice);
+
+        py.detach(move || {
+            let ptr = ptr_addr as *mut u8;
+            decode_into_internal(data, ptr, byte_len, JxlDataType::Float, c, w, h)
+        })
+        .map_err(PyRuntimeError::new_err)
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "Destination array must be a writable numpy array of uint8, uint16, or float32",
+        ))
+    }
+}
+
 /// Encode raw pixel data to JPEG XL format.
 ///
 /// The GIL is released during encoding for concurrency.
 #[pyfunction]
-#[pyo3(signature = (data, width, height, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, num_channels = 4, exif = None, xmp = None, icc = None))]
+#[pyo3(signature = (data, width, height, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, num_channels = 4, exif = None, xmp = None, icc = None, intensity_target = None))]
 fn encode<'py>(
     py: Python<'py>,
     data: &[u8],
@@ -499,6 +1066,7 @@ fn encode<'py>(
     exif: Option<&[u8]>,
     xmp: Option<&[u8]>,
     icc: Option<&[u8]>,
+    intensity_target: Option<f32>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let jxl = py
         .detach(|| {
@@ -513,6 +1081,7 @@ fn encode<'py>(
                 exif,
                 xmp,
                 icc,
+                intensity_target,
             )
         })
         .map_err(PyRuntimeError::new_err)?;
@@ -545,7 +1114,9 @@ fn decode_to_numpy<'py>(
             let w = result.meta.width as usize;
             let c = result.total_channels as usize;
             let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+                .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+            })?;
             Ok((result.meta, array.into_pyarray(py).into_any()))
         }
         Some("uint16") => {
@@ -556,7 +1127,9 @@ fn decode_to_numpy<'py>(
             let w = result.meta.width as usize;
             let c = result.total_channels as usize;
             let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+                .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+            })?;
             Ok((result.meta, array.into_pyarray(py).into_any()))
         }
         Some("float32") => {
@@ -567,7 +1140,9 @@ fn decode_to_numpy<'py>(
             let w = result.meta.width as usize;
             let c = result.total_channels as usize;
             let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+                .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+            })?;
             Ok((result.meta, array.into_pyarray(py).into_any()))
         }
         _ => {
@@ -614,12 +1189,12 @@ fn decode_to_numpy<'py>(
     }
 }
 
-/// Encode a NumPy array (H, W, C) of uint8, uint16, or float32 to JPEG XL.
+/// Encode a NumPy array (H, W) or (H, W, C) of uint8, uint16, or float32 to JPEG XL.
 ///
-/// Reads from the NumPy array via zero-copy (if C-contiguous).
+/// Automatically supports 2D grayscale arrays. Reads via zero-copy (if C-contiguous).
 /// The GIL is released during encoding.
 #[pyfunction]
-#[pyo3(signature = (array, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, exif = None, xmp = None, icc = None))]
+#[pyo3(signature = (array, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, exif = None, xmp = None, icc = None, intensity_target = None))]
 fn encode_from_numpy<'py>(
     py: Python<'py>,
     array: &Bound<'py, PyAny>,
@@ -629,18 +1204,20 @@ fn encode_from_numpy<'py>(
     exif: Option<&[u8]>,
     xmp: Option<&[u8]>,
     icc: Option<&[u8]>,
+    intensity_target: Option<f32>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     if let Ok(arr_u8) = array.extract::<PyReadonlyArrayDyn<'py, u8>>() {
         let shape = arr_u8.shape();
-        if shape.len() != 3 {
+        let (height, width, num_channels) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected 3D array (H, W, C), got {}D",
+                "Expected 2D (H, W) or 3D (H, W, C) array, got {}D",
                 shape.len()
             )));
-        }
-        let height = shape[0] as u32;
-        let width = shape[1] as u32;
-        let num_channels = shape[2] as u32;
+        };
 
         let array_view = arr_u8.as_array();
         if !array_view.is_standard_layout() {
@@ -663,6 +1240,7 @@ fn encode_from_numpy<'py>(
                     exif,
                     xmp,
                     icc,
+                    intensity_target,
                 )
             })
             .map_err(PyRuntimeError::new_err)?;
@@ -670,15 +1248,16 @@ fn encode_from_numpy<'py>(
         Ok(PyBytes::new(py, &jxl))
     } else if let Ok(arr_u16) = array.extract::<PyReadonlyArrayDyn<'py, u16>>() {
         let shape = arr_u16.shape();
-        if shape.len() != 3 {
+        let (height, width, num_channels) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected 3D array (H, W, C), got {}D",
+                "Expected 2D (H, W) or 3D (H, W, C) array, got {}D",
                 shape.len()
             )));
-        }
-        let height = shape[0] as u32;
-        let width = shape[1] as u32;
-        let num_channels = shape[2] as u32;
+        };
 
         let array_view = arr_u16.as_array();
         if !array_view.is_standard_layout() {
@@ -701,6 +1280,7 @@ fn encode_from_numpy<'py>(
                     exif,
                     xmp,
                     icc,
+                    intensity_target,
                 )
             })
             .map_err(PyRuntimeError::new_err)?;
@@ -708,15 +1288,16 @@ fn encode_from_numpy<'py>(
         Ok(PyBytes::new(py, &jxl))
     } else if let Ok(arr_f32) = array.extract::<PyReadonlyArrayDyn<'py, f32>>() {
         let shape = arr_f32.shape();
-        if shape.len() != 3 {
+        let (height, width, num_channels) = if shape.len() == 2 {
+            (shape[0] as u32, shape[1] as u32, 1u32)
+        } else if shape.len() == 3 {
+            (shape[0] as u32, shape[1] as u32, shape[2] as u32)
+        } else {
             return Err(PyRuntimeError::new_err(format!(
-                "Expected 3D array (H, W, C), got {}D",
+                "Expected 2D (H, W) or 3D (H, W, C) array, got {}D",
                 shape.len()
             )));
-        }
-        let height = shape[0] as u32;
-        let width = shape[1] as u32;
-        let num_channels = shape[2] as u32;
+        };
 
         let array_view = arr_f32.as_array();
         if !array_view.is_standard_layout() {
@@ -739,6 +1320,7 @@ fn encode_from_numpy<'py>(
                     exif,
                     xmp,
                     icc,
+                    intensity_target,
                 )
             })
             .map_err(PyRuntimeError::new_err)?;
@@ -1187,6 +1769,11 @@ fn _pyjpegxl(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode, m)?)?;
     m.add_function(wrap_pyfunction!(decode_to_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(encode_from_numpy, m)?)?;
+    m.add_function(wrap_pyfunction!(probe, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_into, m)?)?;
+    // Concurrency controls
+    m.add_function(wrap_pyfunction!(set_num_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(get_num_threads, m)?)?;
     // JPEG types
     m.add_class::<JpegInfo>()?;
     // JPEG functions

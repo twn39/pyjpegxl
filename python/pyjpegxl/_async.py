@@ -11,7 +11,11 @@ import os
 from typing import TYPE_CHECKING
 
 from pyjpegxl._io import (
+    jpeg_file_to_jxl,
+    jxl_file_to_jpeg,
+    probe_file,
     read,
+    read_into,
     read_to_numpy,
     write,
     write_from_numpy,
@@ -27,6 +31,7 @@ from pyjpegxl._pyjpegxl import (
     JpegInfo,
     Metadata,
     decode,
+    decode_into,
     decode_to_numpy,
     encode,
     encode_from_numpy,
@@ -34,6 +39,9 @@ from pyjpegxl._pyjpegxl import (
     jpeg_decode_to_numpy,
     jpeg_encode,
     jpeg_encode_from_numpy,
+    jpeg_to_jxl,
+    jxl_to_jpeg,
+    probe,
 )
 
 if TYPE_CHECKING:
@@ -45,9 +53,19 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+async def async_probe(data: bytes) -> Metadata:
+    """Async fast metadata inspection without decoding pixel data."""
+    return await asyncio.to_thread(probe, data)
+
+
 async def async_decode(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
     """Async decode JXL bytes → (Metadata, pixel bytes)."""
     return await asyncio.to_thread(decode, data, dtype=dtype)
+
+
+async def async_decode_into(data: bytes, out: np.ndarray) -> Metadata:
+    """Async decode JXL bytes directly into preallocated writable NumPy array."""
+    return await asyncio.to_thread(decode_into, data, out)
 
 
 async def async_encode(
@@ -62,6 +80,7 @@ async def async_encode(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> bytes:
     """Async encode pixel bytes → JXL bytes."""
     return await asyncio.to_thread(
@@ -76,6 +95,7 @@ async def async_encode(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
 
 
@@ -93,6 +113,7 @@ async def async_encode_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> bytes:
     """Async encode numpy.ndarray → JXL bytes."""
     return await asyncio.to_thread(
@@ -104,12 +125,18 @@ async def async_encode_from_numpy(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
 
 
 # ---------------------------------------------------------------------------
 # JXL async — file I/O
 # ---------------------------------------------------------------------------
+
+
+async def async_probe_file(path: str | os.PathLike) -> Metadata:
+    """Async probe a JXL file metadata without decoding pixel data."""
+    return await asyncio.to_thread(probe_file, path)
 
 
 async def async_read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
@@ -120,6 +147,11 @@ async def async_read(path: str | os.PathLike, *, dtype: str | None = None) -> tu
 async def async_read_to_numpy(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, np.ndarray]:
     """Async read a JXL file → (Metadata, numpy.ndarray)."""
     return await asyncio.to_thread(read_to_numpy, path, dtype=dtype)
+
+
+async def async_read_into(path: str | os.PathLike, out: np.ndarray) -> Metadata:
+    """Async read a JXL file and decode directly into preallocated writable NumPy array."""
+    return await asyncio.to_thread(read_into, path, out)
 
 
 async def async_write(
@@ -135,6 +167,7 @@ async def async_write(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Async encode pixel bytes and write to a JXL file."""
     return await asyncio.to_thread(
@@ -150,6 +183,7 @@ async def async_write(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
 
 
@@ -163,6 +197,7 @@ async def async_write_from_numpy(
     exif: bytes | None = None,
     xmp: bytes | None = None,
     icc: bytes | None = None,
+    intensity_target: float | None = None,
 ) -> int:
     """Async encode numpy.ndarray and write to a JXL file."""
     return await asyncio.to_thread(
@@ -175,6 +210,7 @@ async def async_write_from_numpy(
         exif=exif,
         xmp=xmp,
         icc=icc,
+        intensity_target=intensity_target,
     )
 
 
@@ -279,9 +315,6 @@ async def async_jpeg_write_from_numpy(
 # ---------------------------------------------------------------------------
 # JPEG ↔ JXL lossless transcoding — async
 # ---------------------------------------------------------------------------
-
-from pyjpegxl._io import jpeg_file_to_jxl, jxl_file_to_jpeg  # noqa: E402
-from pyjpegxl._pyjpegxl import jpeg_to_jxl, jxl_to_jpeg  # noqa: E402
 
 
 async def async_jpeg_to_jxl(data: bytes) -> bytes:
