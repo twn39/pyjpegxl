@@ -552,9 +552,11 @@ class TestBenchComparative:
     """Side-by-side benchmark comparing pyjpegxl against pylibjxl and Pillow."""
 
     def test_compare_jxl_decode(self, bench_ctx: BenchmarkContext):
-        # pyjpegxl
+        cpu_count = os.cpu_count() or 4
+
+        # pyjpegxl (uses all CPU cores by default)
         runner.run(
-            "pyjpegxl JXL decode",
+            f"pyjpegxl JXL decode ({cpu_count}t)",
             "compare_jxl_decode",
             pyjpegxl.decode_to_numpy,
             bench_ctx.jxl_bytes,
@@ -566,10 +568,26 @@ class TestBenchComparative:
         if has_module("pylibjxl"):
             import pylibjxl
 
+            # 1. pylibjxl default top-level decode (defaults to 2 worker threads)
             runner.run(
-                "pylibjxl JXL decode",
+                "pylibjxl JXL decode (default 2t)",
                 "compare_jxl_decode",
                 pylibjxl.decode,
+                bench_ctx.jxl_bytes,
+                pixels=bench_ctx.pixels,
+                raw_bytes=bench_ctx.raw_bytes,
+            )
+
+            # 2. pylibjxl with matching CPU threads (apples-to-apples)
+            jxl_multi = pylibjxl.JXL(threads=cpu_count)
+
+            def pylibjxl_decode_multi(b):
+                return jxl_multi.decode(b)
+
+            runner.run(
+                f"pylibjxl JXL decode (matched {cpu_count}t)",
+                "compare_jxl_decode",
+                pylibjxl_decode_multi,
                 bench_ctx.jxl_bytes,
                 pixels=bench_ctx.pixels,
                 raw_bytes=bench_ctx.raw_bytes,
@@ -688,9 +706,11 @@ class TestBenchComparative:
             )
 
     def test_compare_jxl_encode(self, bench_ctx: BenchmarkContext):
-        # pyjpegxl lossless
+        cpu_count = os.cpu_count() or 4
+
+        # 1. Fast tier comparison (Lightning / effort=1, lossless)
         runner.run(
-            "pyjpegxl JXL encode (lossless)",
+            f"pyjpegxl JXL encode (Lightning/eff=1, {cpu_count}t)",
             "compare_jxl_encode",
             pyjpegxl.encode_from_numpy,
             bench_ctx.rgb_arr,
@@ -700,21 +720,23 @@ class TestBenchComparative:
             raw_bytes=bench_ctx.raw_bytes,
         )
 
-        # pylibjxl lossless
         if has_module("pylibjxl"):
             import pylibjxl
 
+            jxl_enc_multi = pylibjxl.JXL(threads=cpu_count, effort=1, lossless=True)
+
+            def pylibjxl_enc_eff1(arr):
+                return jxl_enc_multi.encode(arr, effort=1, lossless=True)
+
             runner.run(
-                "pylibjxl JXL encode (lossless)",
+                f"pylibjxl JXL encode (eff=1, matched {cpu_count}t)",
                 "compare_jxl_encode",
-                pylibjxl.encode,
+                pylibjxl_enc_eff1,
                 bench_ctx.rgb_arr,
-                lossless=True,
                 pixels=bench_ctx.pixels,
                 raw_bytes=bench_ctx.raw_bytes,
             )
 
-        # pillow-jxl lossless
         if has_module("pillow_jxl") and has_module("PIL"):
             import io
 
@@ -731,6 +753,35 @@ class TestBenchComparative:
                 "pillow-jxl JXL encode (lossless)",
                 "compare_jxl_encode",
                 pillow_jxl_enc,
+                bench_ctx.rgb_arr,
+                pixels=bench_ctx.pixels,
+                raw_bytes=bench_ctx.raw_bytes,
+            )
+
+        # 2. High effort comparison (Squirrel / effort=7, lossless)
+        runner.run(
+            f"pyjpegxl JXL encode (Squirrel/eff=6, {cpu_count}t)",
+            "compare_jxl_encode",
+            pyjpegxl.encode_from_numpy,
+            bench_ctx.rgb_arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Squirrel,
+            pixels=bench_ctx.pixels,
+            raw_bytes=bench_ctx.raw_bytes,
+        )
+
+        if has_module("pylibjxl"):
+            import pylibjxl
+
+            jxl_enc_eff7 = pylibjxl.JXL(threads=cpu_count, effort=7, lossless=True)
+
+            def pylibjxl_enc_eff7(arr):
+                return jxl_enc_eff7.encode(arr, effort=7, lossless=True)
+
+            runner.run(
+                f"pylibjxl JXL encode (eff=7, matched {cpu_count}t)",
+                "compare_jxl_encode",
+                pylibjxl_enc_eff7,
                 bench_ctx.rgb_arr,
                 pixels=bench_ctx.pixels,
                 raw_bytes=bench_ctx.raw_bytes,
