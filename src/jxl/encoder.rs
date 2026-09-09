@@ -60,7 +60,16 @@ macro_rules! impl_encode_internal {
                     encoder.uses_original_profile = true;
                     encoder.quality = 0.0;
                 } else {
-                    encoder.quality = quality;
+                    let dist = if quality > 15.0 {
+                        unsafe {
+                            jpegxl_sys::encoder::encode::JxlEncoderDistanceFromQuality(
+                                quality.clamp(0.0, 100.0),
+                            )
+                        }
+                    } else {
+                        quality.max(0.0)
+                    };
+                    encoder.quality = dist;
                 }
 
                 if let Some(it) = intensity_target {
