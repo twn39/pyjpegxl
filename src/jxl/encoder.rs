@@ -1,4 +1,4 @@
-use crate::common::runner::get_threads_runner;
+use crate::common::runner::with_threads_runner;
 use crate::jxl::types::EncoderSpeed;
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, Metadata as JxlMetadata};
 use jpegxl_rs::encoder_builder;
@@ -36,59 +36,60 @@ macro_rules! impl_encode_internal {
 
             let has_alpha = num_channels == 2 || num_channels == 4;
 
-            let runner = get_threads_runner();
-            let mut encoder = if let Some(ref r) = runner {
-                encoder_builder()
-                    .parallel_runner(r)
-                    .speed(speed.into())
-                    .has_alpha(has_alpha)
-                    .build()
-            } else {
-                encoder_builder()
-                    .speed(speed.into())
-                    .has_alpha(has_alpha)
-                    .build()
-            }
-            .map_err(|e| format!("Failed to create encoder: {e}"))?;
+            with_threads_runner(|runner| {
+                let mut encoder = if let Some(r) = runner {
+                    encoder_builder()
+                        .parallel_runner(r)
+                        .speed(speed.into())
+                        .has_alpha(has_alpha)
+                        .build()
+                } else {
+                    encoder_builder()
+                        .speed(speed.into())
+                        .has_alpha(has_alpha)
+                        .build()
+                }
+                .map_err(|e| format!("Failed to create encoder: {e}"))?;
 
-            if num_channels == 1 || num_channels == 2 {
-                encoder.color_encoding = Some($luma_encoding);
-            }
+                if num_channels == 1 || num_channels == 2 {
+                    encoder.color_encoding = Some($luma_encoding);
+                }
 
-            if lossless {
-                encoder.lossless = Some(true);
-                encoder.uses_original_profile = true;
-                encoder.quality = 0.0;
-            } else {
-                encoder.quality = quality;
-            }
+                if lossless {
+                    encoder.lossless = Some(true);
+                    encoder.uses_original_profile = true;
+                    encoder.quality = 0.0;
+                } else {
+                    encoder.quality = quality;
+                }
 
-            if let Some(it) = intensity_target {
-                encoder.target_intensity = Some(it);
-            }
+                if let Some(it) = intensity_target {
+                    encoder.target_intensity = Some(it);
+                }
 
-            if let Some(e) = exif {
-                encoder
-                    .add_metadata(&JxlMetadata::Exif(e), true)
-                    .map_err(|e| format!("Failed adding exif: {e}"))?;
-            }
-            if let Some(x) = xmp {
-                encoder
-                    .add_metadata(&JxlMetadata::Xmp(x), true)
-                    .map_err(|e| format!("Failed adding xmp: {e}"))?;
-            }
-            if let Some(i) = icc {
-                encoder
-                    .add_metadata(&JxlMetadata::Custom(*b"prof", i), false)
-                    .map_err(|e| format!("Failed adding icc: {e}"))?;
-            }
+                if let Some(e) = exif {
+                    encoder
+                        .add_metadata(&JxlMetadata::Exif(e), true)
+                        .map_err(|e| format!("Failed adding exif: {e}"))?;
+                }
+                if let Some(x) = xmp {
+                    encoder
+                        .add_metadata(&JxlMetadata::Xmp(x), true)
+                        .map_err(|e| format!("Failed adding xmp: {e}"))?;
+                }
+                if let Some(i) = icc {
+                    encoder
+                        .add_metadata(&JxlMetadata::Custom(*b"prof", i), false)
+                        .map_err(|e| format!("Failed adding icc: {e}"))?;
+                }
 
-            let frame = EncoderFrame::new(data).num_channels(num_channels);
-            let result = encoder
-                .encode_frame::<$t, $t>(&frame, width, height)
-                .map_err(|e| format!("Failed to encode: {e}"))?;
+                let frame = EncoderFrame::new(data).num_channels(num_channels);
+                let result = encoder
+                    .encode_frame::<$t, $t>(&frame, width, height)
+                    .map_err(|e| format!("Failed to encode: {e}"))?;
 
-            Ok(result.data)
+                Ok(result.data)
+            })
         }
     };
 }
@@ -162,7 +163,11 @@ pub fn encode_from_numpy<'py>(
                 "Array must be C-contiguous. Use numpy.ascontiguousarray().",
             ));
         }
-        let data = view.as_slice().unwrap();
+        let data = view.as_slice().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "Array is not contiguous or memory layout is invalid. Use numpy.ascontiguousarray().",
+            )
+        })?;
         let jxl = py
             .detach(|| {
                 encode_internal_u8(
@@ -189,7 +194,11 @@ pub fn encode_from_numpy<'py>(
                 "Array must be C-contiguous. Use numpy.ascontiguousarray().",
             ));
         }
-        let data = view.as_slice().unwrap();
+        let data = view.as_slice().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "Array is not contiguous or memory layout is invalid. Use numpy.ascontiguousarray().",
+            )
+        })?;
         let jxl = py
             .detach(|| {
                 encode_internal_u16(
@@ -216,7 +225,11 @@ pub fn encode_from_numpy<'py>(
                 "Array must be C-contiguous. Use numpy.ascontiguousarray().",
             ));
         }
-        let data = view.as_slice().unwrap();
+        let data = view.as_slice().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "Array is not contiguous or memory layout is invalid. Use numpy.ascontiguousarray().",
+            )
+        })?;
         let jxl = py
             .detach(|| {
                 encode_internal_f32(

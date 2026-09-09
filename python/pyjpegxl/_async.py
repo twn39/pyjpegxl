@@ -262,9 +262,7 @@ async def async_jpeg_encode(
     )
 
 
-async def async_jpeg_decode_to_numpy(
-    data: bytes, *, channels: int | None = None
-) -> tuple[JpegInfo, np.ndarray]:
+async def async_jpeg_decode_to_numpy(data: bytes, *, channels: int | None = None) -> tuple[JpegInfo, np.ndarray]:
     """Async decode JPEG bytes → (JpegInfo, numpy.ndarray)."""
     return await asyncio.to_thread(jpeg_decode_to_numpy, data, channels=channels)
 
@@ -287,9 +285,7 @@ async def async_jpeg_encode_from_numpy(
 # ---------------------------------------------------------------------------
 
 
-async def async_jpeg_read(
-    path: str | os.PathLike, *, channels: int | None = None
-) -> tuple[JpegInfo, bytes]:
+async def async_jpeg_read(path: str | os.PathLike, *, channels: int | None = None) -> tuple[JpegInfo, bytes]:
     """Async read a JPEG file → (JpegInfo, pixel bytes)."""
     return await asyncio.to_thread(jpeg_read, path, channels=channels)
 

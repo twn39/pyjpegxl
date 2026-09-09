@@ -857,3 +857,63 @@ class TestNewOptimizations:
         assert info4.width == jpeg_rgb_arr.shape[1]
         assert np.array_equal(out, out_file)
 
+
+class TestStabilityAndSafety:
+    """Regression tests for process stability, memory safety, and runner reuse."""
+
+    def test_native_non_contiguous_array_rejections(self):
+        from pyjpegxl import _pyjpegxl
+
+        base = np.zeros((32, 32, 3), dtype=np.uint8)
+        non_contig = base[::2, ::2]  # non-contiguous view
+        assert not non_contig.flags["C_CONTIGUOUS"]
+
+        # 1. JXL encode_from_numpy (uint8, uint16, float32)
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.encode_from_numpy(non_contig)
+
+        base_u16 = np.zeros((32, 32, 3), dtype=np.uint16)
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.encode_from_numpy(base_u16[::2, ::2])
+
+        base_f32 = np.zeros((32, 32, 3), dtype=np.float32)
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.encode_from_numpy(base_f32[::2, ::2])
+
+        # 2. JPEG encode_from_numpy
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.jpeg_encode_from_numpy(non_contig)
+
+        # 3. JXL decode_into
+        test_jxl = pyjpegxl.encode(np.zeros((16, 16, 3), dtype=np.uint8).tobytes(), 16, 16, num_channels=3)
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.decode_into(test_jxl, non_contig)
+
+        # 4. JPEG decode_into
+        test_jpg = pyjpegxl.jpeg_encode(np.zeros((16, 16, 3), dtype=np.uint8).tobytes(), 16, 16, num_channels=3)
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            _pyjpegxl.jpeg_decode_into(test_jpg, non_contig)
+
+    def test_decode_into_dimension_and_size_mismatch(self):
+        from pyjpegxl import _pyjpegxl
+
+        test_jpg = pyjpegxl.jpeg_encode(np.zeros((32, 32, 3), dtype=np.uint8).tobytes(), 32, 32, num_channels=3)
+        test_jxl = pyjpegxl.encode(np.zeros((32, 32, 3), dtype=np.uint8).tobytes(), 32, 32, num_channels=3)
+
+        # Wrong dimensions (16x16 buffer for 32x32 image)
+        small_buf = np.zeros((16, 16, 3), dtype=np.uint8)
+        with pytest.raises(RuntimeError, match="dimensions"):
+            _pyjpegxl.jpeg_decode_into(test_jpg, small_buf)
+
+        with pytest.raises(RuntimeError, match="dimensions"):
+            _pyjpegxl.decode_into(test_jxl, small_buf)
+
+    def test_jxl_runner_reuse_across_encodes(self):
+        """Verify repeated encodes run safely and efficiently with runner reuse."""
+        pyjpegxl.set_num_threads(2)
+        arr = np.zeros((64, 64, 3), dtype=np.uint8)
+        for _ in range(5):
+            jxl = pyjpegxl.encode_from_numpy(arr)
+            meta, dec = pyjpegxl.decode_to_numpy(jxl)
+            assert meta.width == 64
+        pyjpegxl.set_num_threads(0)  # reset to auto

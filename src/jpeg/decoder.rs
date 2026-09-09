@@ -44,7 +44,7 @@ pub fn jpeg_decode_internal(
         1 => turbojpeg::PixelFormat::GRAY,
         3 => turbojpeg::PixelFormat::RGB,
         4 => turbojpeg::PixelFormat::RGBA,
-        _ => unreachable!(),
+        _ => return Err(format!("Unsupported channel count for JPEG decoding: {num_channels}")),
     };
 
     let pitch = width * num_channels as usize;
@@ -163,7 +163,19 @@ pub fn jpeg_decode_into<'py>(
     }
 
     let pitch = w * c as usize;
-    let slice = view.as_slice_mut().unwrap();
+    let expected_len = h * pitch;
+    let slice = view.as_slice_mut().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "Array must be C-contiguous and writable. Use numpy.ascontiguousarray().",
+        )
+    })?;
+    if slice.len() < expected_len {
+        return Err(PyRuntimeError::new_err(format!(
+            "Buffer size too small: expected {} bytes, got {}",
+            expected_len,
+            slice.len()
+        )));
+    }
     let slice_ptr_val = slice.as_mut_ptr() as usize;
     let slice_len = slice.len();
 

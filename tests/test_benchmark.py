@@ -813,15 +813,17 @@ def render_table(results: list[BenchmarkResult], as_markdown: bool = False) -> s
         mp_str = f"{r.mp_per_sec:.1f}" if r.mp_per_sec else "-"
         raw_str = f"{r.raw_mb_per_sec:.1f}" if r.raw_mb_per_sec else "-"
         heap_str = f"{r.peak_heap_mb:.2f} MB" if r.peak_heap_mb > 0.01 else "0.00 MB"
-        rows.append([
-            r.name,
-            f"{r.median_ms:.2f}",
-            f"{r.min_ms:.2f}",
-            f"{r.p95_ms:.2f}",
-            mp_str,
-            raw_str,
-            heap_str,
-        ])
+        rows.append(
+            [
+                r.name,
+                f"{r.median_ms:.2f}",
+                f"{r.min_ms:.2f}",
+                f"{r.p95_ms:.2f}",
+                mp_str,
+                raw_str,
+                heap_str,
+            ]
+        )
 
     if as_markdown:
         header_line = "| " + " | ".join(headers) + " |"
@@ -836,10 +838,7 @@ def render_table(results: list[BenchmarkResult], as_markdown: bool = False) -> s
             col_widths[i] = max(col_widths[i], len(val))
 
     def fmt_row(vals: list[str]) -> str:
-        return " | ".join(
-            f"{v:<{col_widths[i]}}" if i == 0 else f"{v:>{col_widths[i]}}"
-            for i, v in enumerate(vals)
-        )
+        return " | ".join(f"{v:<{col_widths[i]}}" if i == 0 else f"{v:>{col_widths[i]}}" for i, v in enumerate(vals))
 
     sep = "-+-".join("-" * w for w in col_widths)
     lines = [

@@ -109,7 +109,11 @@ pub fn jpeg_encode_from_numpy<'py>(
             "Array must be C-contiguous. Use numpy.ascontiguousarray().",
         ));
     }
-    let data = array_view.as_slice().unwrap();
+    let data = array_view.as_slice().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "Array is not contiguous or memory layout is invalid. Use numpy.ascontiguousarray().",
+        )
+    })?;
 
     let jpeg = py
         .detach(|| jpeg_encode_internal(data, width, height, quality, num_channels))
