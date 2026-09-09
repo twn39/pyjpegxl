@@ -129,9 +129,7 @@ files = ["img1.jxl", "img2.jpg", "img3.jxl"]
 results = pyjpegxl.read_batch(files, max_workers=8)
 
 # Parallel lossless dataset transcoding (e.g. JPEG to 20% smaller JXL)
-transcoded = pyjpegxl.transcode_batch(
-    ["a.jpg", "b.jpg"], output_dir="jxl_dataset", target_format="jxl"
-)
+transcoded = pyjpegxl.transcode_batch(["a.jpg", "b.jpg"], output_dir="jxl_dataset", target_format="jxl")
 ```
 
 ### Basic Usage (Bytes API)
