@@ -123,6 +123,33 @@ class TestBytesAPI:
         assert meta.exif == fake_exif
         assert meta.xmp == fake_xmp
 
+    def test_version(self):
+        assert pyjpegxl.__version__ == "0.2.2"
+
+    def test_large_metadata_roundtrip(self, real_image_data):
+        """Test EXIF/XMP larger than 64KB to verify dynamic buffer expansion."""
+        _, rgb_arr, _ = real_image_data
+        px = rgb_arr.tobytes()
+        h, w, c = rgb_arr.shape
+
+        # 100KB EXIF and 80KB XMP to trigger buffer reallocation in libjxl box parser
+        large_exif = b"Exif\x00\x00MM\x00*\x00\x00\x00\x08" + b"E" * 100_000
+        large_xmp = b"http://ns.adobe.com/xap/1.0/\x00" + b"X" * 80_000
+
+        jxl = pyjpegxl.encode(
+            px,
+            w,
+            h,
+            lossless=True,
+            num_channels=c,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            exif=large_exif,
+            xmp=large_xmp,
+        )
+        meta, _ = pyjpegxl.decode(jxl)
+        assert meta.exif == large_exif
+        assert meta.xmp == large_xmp
+
 
 # ---------------------------------------------------------------------------
 # NumPy zero-copy tests
@@ -267,7 +294,8 @@ TEST_JPG = IMAGES_DIR / "test.jpg"
 
 class TestJPEG:
     @pytest.fixture(scope="class")
-    def jpeg_rgb_arr(self):
+    @classmethod
+    def jpeg_rgb_arr(cls):
         """Get an RGB array from test.jpg or generate a synthetic one."""
         if TEST_JPG.exists():
             info, arr = pyjpegxl.jpeg_read_to_numpy(TEST_JPG)
@@ -343,7 +371,8 @@ class TestJPEG:
 
 class TestTranscoding:
     @pytest.fixture(scope="class")
-    def jpeg_bytes(self):
+    @classmethod
+    def jpeg_bytes(cls):
         """Get raw JPEG bytes from test.jpg or generate via turbojpeg."""
         if TEST_JPG.exists():
             with open(TEST_JPG, "rb") as f:
@@ -415,3 +444,143 @@ class TestTranscoding:
         await pyjpegxl.async_jpeg_file_to_jxl(jpeg_in, jxl_out)
         await pyjpegxl.async_jxl_file_to_jpeg(jxl_out, jpeg_out)
         assert jpeg_out.read_bytes() == jpeg_bytes
+
+
+# ---------------------------------------------------------------------------
+# High Bit Depth, HDR & ICC Profile Tests
+# ---------------------------------------------------------------------------
+
+
+class TestHighBitDepthAndIcc:
+    def test_uint16_lossless_roundtrip(self):
+        rng = np.random.default_rng(42)
+        arr = rng.integers(0, 65536, size=(32, 32, 3), dtype=np.uint16)
+        jxl = pyjpegxl.encode_from_numpy(
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+        )
+        meta, decoded = pyjpegxl.decode_to_numpy(jxl, dtype="uint16")
+        assert decoded.dtype == np.uint16
+        assert meta.bits_per_sample == 16
+        assert np.array_equal(arr, decoded)
+
+    def test_float32_hdr_lossless_roundtrip(self):
+        rng = np.random.default_rng(42)
+        arr = rng.uniform(0.0, 5.0, size=(32, 32, 3)).astype(np.float32)
+        jxl = pyjpegxl.encode_from_numpy(
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+        )
+        meta, decoded = pyjpegxl.decode_to_numpy(jxl, dtype="float32")
+        assert decoded.dtype == np.float32
+        assert meta.bits_per_sample == 32
+        # libjxl float encode/decode maintains high precision
+        assert np.allclose(arr, decoded, atol=1e-2)
+
+    def test_auto_dtype_detection(self):
+        rng = np.random.default_rng(42)
+        # 1. uint8
+        u8_arr = rng.integers(0, 256, size=(16, 16, 3), dtype=np.uint8)
+        u8_jxl = pyjpegxl.encode_from_numpy(u8_arr, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        _, u8_dec = pyjpegxl.decode_to_numpy(u8_jxl)
+        assert u8_dec.dtype == np.uint8
+
+        # 2. uint16
+        u16_arr = rng.integers(0, 65536, size=(16, 16, 3), dtype=np.uint16)
+        u16_jxl = pyjpegxl.encode_from_numpy(u16_arr, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        _, u16_dec = pyjpegxl.decode_to_numpy(u16_jxl)
+        assert u16_dec.dtype == np.uint16
+
+        # 3. float32
+        f32_arr = rng.uniform(0.0, 1.0, size=(16, 16, 3)).astype(np.float32)
+        f32_jxl = pyjpegxl.encode_from_numpy(f32_arr, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+        _, f32_dec = pyjpegxl.decode_to_numpy(f32_jxl)
+        assert f32_dec.dtype == np.float32
+
+    def test_icc_profile_roundtrip(self):
+        # A minimal valid-like dummy ICC profile payload
+        dummy_icc = b"TEST_ICC_PROFILE_HEADER" + bytes(range(100))
+        rng = np.random.default_rng(42)
+        arr = rng.integers(0, 256, size=(16, 16, 3), dtype=np.uint8)
+
+        jxl = pyjpegxl.encode_from_numpy(
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            icc=dummy_icc,
+        )
+        meta, _ = pyjpegxl.decode_to_numpy(jxl)
+        assert meta.icc == dummy_icc
+        assert meta.icc_profile == dummy_icc
+
+    def test_non_contiguous_array_handling(self, tmp_path):
+        # Create non-contiguous slice
+        full_arr = np.arange(64 * 64 * 3, dtype=np.uint8).reshape((64, 64, 3))
+        sliced = full_arr[::2, ::2, :]
+        assert not sliced.flags.c_contiguous
+
+        # encode_from_numpy strictly enforces zero-copy C-contiguous layout
+        with pytest.raises(RuntimeError, match="C-contiguous"):
+            pyjpegxl.encode_from_numpy(sliced)
+
+        # write_from_numpy and async_write_from_numpy auto-convert non-contiguous arrays
+        out_path = tmp_path / "sliced.jxl"
+        bytes_written = pyjpegxl.write_from_numpy(
+            out_path, sliced, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning
+        )
+        assert bytes_written > 0
+        _, read_dec = pyjpegxl.read_to_numpy(out_path)
+        assert np.array_equal(sliced, read_dec)
+
+    def test_file_io_high_bit_depth_and_icc(self, tmp_path):
+        dummy_icc = b"CUSTOM_ICC_FOR_FILE_IO"
+        rng = np.random.default_rng(42)
+        arr_u16 = rng.integers(0, 65536, size=(24, 24, 3), dtype=np.uint16)
+
+        out_path = tmp_path / "u16_icc.jxl"
+        n = pyjpegxl.write_from_numpy(
+            out_path,
+            arr_u16,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            icc=dummy_icc,
+        )
+        assert n > 0
+
+        meta, dec = pyjpegxl.read_to_numpy(out_path)
+        assert dec.dtype == np.uint16
+        assert meta.bits_per_sample == 16
+        assert meta.icc == dummy_icc
+        assert np.array_equal(arr_u16, dec)
+
+    @pytest.mark.asyncio
+    async def test_async_high_bit_depth_and_icc(self, tmp_path):
+        dummy_icc = b"ASYNC_ICC_PAYLOAD"
+        rng = np.random.default_rng(42)
+        arr = rng.integers(0, 65536, size=(16, 16, 4), dtype=np.uint16)
+
+        jxl = await pyjpegxl.async_encode_from_numpy(
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            icc=dummy_icc,
+        )
+        meta, dec = await pyjpegxl.async_decode_to_numpy(jxl)
+        assert dec.dtype == np.uint16
+        assert meta.icc == dummy_icc
+        assert np.array_equal(arr, dec)
+
+        out_path = tmp_path / "async_u16.jxl"
+        await pyjpegxl.async_write_from_numpy(
+            out_path,
+            arr,
+            lossless=True,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+            icc=dummy_icc,
+        )
+        meta_read, dec_read = await pyjpegxl.async_read_to_numpy(out_path)
+        assert dec_read.dtype == np.uint16
+        assert meta_read.icc == dummy_icc
+        assert np.array_equal(arr, dec_read)

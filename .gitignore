@@ -26,3 +26,4 @@ build/
 coverage.xml
 .ruff_cache/
 .coverage
+.codegraph

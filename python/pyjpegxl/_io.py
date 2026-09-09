@@ -7,7 +7,8 @@ that handle file I/O so users don't have to.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+
+import numpy as np
 
 from pyjpegxl._pyjpegxl import (
     EncoderSpeed,
@@ -18,34 +19,35 @@ from pyjpegxl._pyjpegxl import (
     encode_from_numpy,
 )
 
-if TYPE_CHECKING:
-    import numpy as np
 
-
-def read(path: str | os.PathLike) -> tuple[Metadata, bytes]:
+def read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
     """Read a JXL file and decode it to raw pixel bytes.
 
     Args:
         path: Path to the .jxl file.
+        dtype: Optional pixel type to decode to: "uint8", "uint16", or "float32".
 
     Returns:
         A tuple of (Metadata, pixel bytes).
     """
     with open(path, "rb") as f:
-        return decode(f.read())
+        return decode(f.read(), dtype=dtype)
 
 
-def read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, np.ndarray]:
+def read_to_numpy(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, np.ndarray]:
     """Read a JXL file and decode it to a NumPy array.
 
     Args:
         path: Path to the .jxl file.
+        dtype: Optional pixel type ("uint8", "uint16", "float32"). If None,
+            automatically detects source image bit depth and returns uint8,
+            uint16, or float32 ndarray.
 
     Returns:
-        A tuple of (Metadata, ndarray of shape (H, W, C) dtype uint8).
+        A tuple of (Metadata, ndarray of shape (H, W, C)).
     """
     with open(path, "rb") as f:
-        return decode_to_numpy(f.read())
+        return decode_to_numpy(f.read(), dtype=dtype)
 
 
 def write(
@@ -60,6 +62,7 @@ def write(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int:
     """Encode raw pixel data and write it to a JXL file.
 
@@ -74,6 +77,7 @@ def write(
         num_channels: Number of channels (3=RGB, 4=RGBA, etc.).
         exif: Optional raw EXIF metadata bytes.
         xmp: Optional raw XMP metadata bytes.
+        icc: Optional raw ICC color profile bytes.
 
     Returns:
         Number of bytes written.
@@ -88,6 +92,7 @@ def write(
         num_channels=num_channels,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
     out = os.fspath(path)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -104,21 +109,29 @@ def write_from_numpy(
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int:
     """Encode a NumPy array and write it to a JXL file.
 
+    Supports arrays with dtype uint8, uint16, and float32. Automatically
+    converts non-contiguous arrays (e.g. slices, crops) to C-contiguous layout.
+
     Args:
         path: Destination file path. Parent directories are created automatically.
-        array: Image as ndarray of shape (H, W, C), dtype uint8, C-contiguous.
+        array: Image as ndarray of shape (H, W, C), dtype uint8, uint16, or float32.
         lossless: Use lossless compression.
         quality: Encoding quality (0.0–1.0). Ignored when lossless=True.
         speed: Encoder effort preset.
         exif: Optional raw EXIF metadata bytes.
         xmp: Optional raw XMP metadata bytes.
+        icc: Optional raw ICC color profile bytes.
 
     Returns:
         Number of bytes written.
     """
+    if not array.flags["C_CONTIGUOUS"]:
+        array = np.ascontiguousarray(array)
+
     jxl = encode_from_numpy(
         array,
         lossless=lossless,
@@ -126,6 +139,7 @@ def write_from_numpy(
         speed=speed,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
     out = os.fspath(path)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

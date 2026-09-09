@@ -44,7 +44,7 @@ module-name = "pyjpegxl._pyjpegxl"
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --tb=short"
+addopts = "-ra -q --tb=short --ignore=tests/test_benchmark.py"
 testpaths = [
     "tests",
 ]

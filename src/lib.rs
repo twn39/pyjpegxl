@@ -1,3 +1,6 @@
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
+use jpegxl_rs::decode::Pixels;
 use jpegxl_rs::encode::{EncoderFrame, EncoderSpeed as JxlEncoderSpeed};
 use jpegxl_rs::{decoder_builder, encoder_builder, ThreadsRunner};
 use numpy::{ndarray, IntoPyArray, PyArrayDyn, PyReadonlyArrayDyn, PyUntypedArrayMethods};
@@ -51,14 +54,32 @@ struct Metadata {
     has_alpha: bool,
     exif: Option<Vec<u8>>,
     xmp: Option<Vec<u8>>,
+    icc: Option<Vec<u8>>,
+    bits_per_sample: u32,
+    intensity_target: f32,
+    min_nits: f32,
 }
 
 #[pymethods]
 impl Metadata {
+    #[getter]
+    fn icc_profile<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.icc.as_ref().map(|b| PyBytes::new(py, b))
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "Metadata(width={}, height={}, num_color_channels={}, has_alpha={}, has_exif={}, has_xmp={})",
-            self.width, self.height, self.num_color_channels, self.has_alpha, self.exif.is_some(), self.xmp.is_some()
+            "Metadata(width={}, height={}, num_color_channels={}, has_alpha={}, bits_per_sample={}, has_exif={}, has_xmp={}, has_icc={}, intensity_target={}, min_nits={})",
+            self.width,
+            self.height,
+            self.num_color_channels,
+            self.has_alpha,
+            self.bits_per_sample,
+            self.exif.is_some(),
+            self.xmp.is_some(),
+            self.icc.is_some(),
+            self.intensity_target,
+            self.min_nits
         )
     }
 }
@@ -98,37 +119,46 @@ impl From<EncoderSpeed> for JxlEncoderSpeed {
 // Internal helpers (no Python objects, safe to call without GIL)
 // ---------------------------------------------------------------------------
 
-struct DecodeResult {
+struct DecodeResult<T> {
     meta: Metadata,
-    pixels: Vec<u8>,
+    pixels: Vec<T>,
     total_channels: u32,
 }
 
-fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+enum AutoDecodeResult {
+    Uint8(DecodeResult<u8>),
+    Uint16(DecodeResult<u16>),
+    Float(DecodeResult<f32>),
+}
+
+
+fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
     let mut exif = None;
     let mut xmp = None;
+    let mut icc = None;
 
     unsafe {
         let dec = JxlDecoderCreate(ptr::null());
         if dec.is_null() {
-            return (None, None);
+            return (None, None, None);
         }
         let _dec_guard = DecoderGuard(dec);
 
         let events = (JxlDecoderStatus::Box as std::os::raw::c_int)
             | (JxlDecoderStatus::BoxComplete as std::os::raw::c_int);
         if JxlDecoderSubscribeEvents(dec, events) != JxlDecoderStatus::Success {
-            return (None, None);
+            return (None, None, None);
         }
 
         JxlDecoderSetDecompressBoxes(dec, JxlBool::True);
 
         if JxlDecoderSetInput(dec, data.as_ptr(), data.len()) != JxlDecoderStatus::Success {
-            return (None, None);
+            return (None, None, None);
         }
 
         let mut current_box_type = [0u8; 4];
         let mut current_box_data = Vec::new();
+        let mut current_box_offset = 0usize;
         let mut getting_box = false;
 
         loop {
@@ -148,73 +178,102 @@ fn extract_metadata(data: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
                             box_type.0[3] as u8,
                         ];
 
-                        // We only care about Exif and xml
-                        if &current_box_type == b"Exif" || &current_box_type == b"xml " {
+                        // We care about Exif, xml, and prof boxes
+                        if &current_box_type == b"Exif"
+                            || &current_box_type == b"xml "
+                            || &current_box_type == b"prof"
+                        {
                             let mut size = 0;
-                            if JxlDecoderGetBoxSizeRaw(dec, &mut size) == JxlDecoderStatus::Success
+                            let initial_size = if JxlDecoderGetBoxSizeRaw(dec, &mut size)
+                                == JxlDecoderStatus::Success
+                                && size > 0
                             {
-                                current_box_data.resize(size as usize, 0);
-                                JxlDecoderSetBoxBuffer(
-                                    dec,
-                                    current_box_data.as_mut_ptr(),
-                                    size as usize,
-                                );
-                                getting_box = true;
+                                size as usize
                             } else {
-                                // Dynamic size, allocate a large enough buffer or implement progressive reading
-                                // For simplicity, assume sizes are known or we can just skip
+                                65536 // 64KB initial chunk for dynamic or unknown box size
+                            };
+                            current_box_data.resize(initial_size, 0);
+                            current_box_offset = 0;
+                            if JxlDecoderSetBoxBuffer(
+                                dec,
+                                current_box_data.as_mut_ptr(),
+                                initial_size,
+                            ) == JxlDecoderStatus::Success
+                            {
+                                getting_box = true;
                             }
                         }
                     }
                 }
-                JxlDecoderStatus::BoxNeedMoreOutput => {
-                    // Buffer was not large enough. Realistically we should grow `current_box_data` and call `JxlDecoderSetBoxBuffer` again.
-                    // For now, if we don't handle it, we must release buffer.
-                    JxlDecoderReleaseBoxBuffer(dec);
-                    getting_box = false;
-                }
-                JxlDecoderStatus::BoxComplete => {
-                    if getting_box {
-                        let released = JxlDecoderReleaseBoxBuffer(dec);
-                        // The remaining valid size is original buffer len minus released unused bytes
-                        let valid_size = current_box_data.len().saturating_sub(released);
-                        current_box_data.truncate(valid_size);
+                JxlDecoderStatus::BoxNeedMoreOutput if getting_box => {
+                    let remaining = JxlDecoderReleaseBoxBuffer(dec);
+                    let written = (current_box_data.len() - current_box_offset) - remaining;
+                    current_box_offset += written;
 
-                        if &current_box_type == b"Exif" {
-                            exif = Some(current_box_data.clone());
-                        } else if &current_box_type == b"xml " {
-                            xmp = Some(current_box_data.clone());
-                        }
+                    // Grow buffer dynamically
+                    let new_size =
+                        (current_box_data.len() * 2).max(current_box_data.len() + 65536);
+                    current_box_data.resize(new_size, 0);
+
+                    let buf_ptr = current_box_data.as_mut_ptr().add(current_box_offset);
+                    let buf_len = current_box_data.len() - current_box_offset;
+                    if JxlDecoderSetBoxBuffer(dec, buf_ptr, buf_len)
+                        != JxlDecoderStatus::Success
+                    {
                         getting_box = false;
                     }
+                }
+                JxlDecoderStatus::BoxComplete if getting_box => {
+                    let released = JxlDecoderReleaseBoxBuffer(dec);
+                    let written =
+                        (current_box_data.len() - current_box_offset).saturating_sub(released);
+                    current_box_offset += written;
+                    current_box_data.truncate(current_box_offset);
+
+                    if &current_box_type == b"Exif" {
+                        exif = Some(current_box_data.clone());
+                    } else if &current_box_type == b"xml " {
+                        xmp = Some(current_box_data.clone());
+                    } else if &current_box_type == b"prof" {
+                        icc = Some(current_box_data.clone());
+                    }
+                    getting_box = false;
                 }
                 _ => {}
             }
 
-            // If we found both, we can exit early!
-            if exif.is_some() && xmp.is_some() {
+            // If we found all three, we can exit early!
+            if exif.is_some() && xmp.is_some() && icc.is_some() {
                 break;
             }
         }
     }
 
-    (exif, xmp)
+    (exif, xmp, icc)
 }
 
-fn decode_internal(data: &[u8]) -> Result<DecodeResult, String> {
+fn decode_auto(data: &[u8]) -> Result<AutoDecodeResult, String> {
     let runner = ThreadsRunner::default();
     let decoder = decoder_builder()
         .parallel_runner(&runner)
+        .icc_profile(true)
         .build()
         .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
-    let (meta, pixel_data) = decoder
-        .decode_with::<u8>(data)
+    let (meta, pixels) = decoder
+        .decode(data)
         .map_err(|e| format!("Failed to decode: {e}"))?;
 
     let total_channels = meta.num_color_channels + u32::from(meta.has_alpha_channel);
+    let (exif, xmp, icc_box) = extract_metadata(data);
+    let final_icc = icc_box.or(meta.icc_profile);
 
-    let (exif, xmp) = extract_metadata(data);
+    let bits_per_sample = match &pixels {
+        Pixels::Uint8(_) => 8,
+        Pixels::Uint16(_) => 16,
+        Pixels::Float(_) => 32,
+        Pixels::Float16(_) => 16,
+    };
 
     let metadata = Metadata {
         width: meta.width,
@@ -223,74 +282,156 @@ fn decode_internal(data: &[u8]) -> Result<DecodeResult, String> {
         has_alpha: meta.has_alpha_channel,
         exif,
         xmp,
+        icc: final_icc,
+        bits_per_sample,
+        intensity_target: meta.intensity_target,
+        min_nits: meta.min_nits,
     };
 
-    Ok(DecodeResult {
-        meta: metadata,
-        pixels: pixel_data,
-        total_channels,
-    })
+    match pixels {
+        Pixels::Uint8(p) => Ok(AutoDecodeResult::Uint8(DecodeResult {
+            meta: metadata,
+            pixels: p,
+            total_channels,
+        })),
+        Pixels::Uint16(p) => Ok(AutoDecodeResult::Uint16(DecodeResult {
+            meta: metadata,
+            pixels: p,
+            total_channels,
+        })),
+        Pixels::Float(p) => Ok(AutoDecodeResult::Float(DecodeResult {
+            meta: metadata,
+            pixels: p,
+            total_channels,
+        })),
+        Pixels::Float16(p) => {
+            let p_f32: Vec<f32> = p.into_iter().map(f32::from).collect();
+            Ok(AutoDecodeResult::Float(DecodeResult {
+                meta: metadata,
+                pixels: p_f32,
+                total_channels,
+            }))
+        }
+    }
 }
 
-fn encode_internal(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    lossless: bool,
-    quality: f32,
-    speed: EncoderSpeed,
-    num_channels: u32,
-    exif: Option<&[u8]>,
-    xmp: Option<&[u8]>,
-) -> Result<Vec<u8>, String> {
-    let expected_len = (width * height * num_channels) as usize;
-    if data.len() != expected_len {
-        return Err(format!(
-            "Data length mismatch: expected {} bytes ({}x{}x{}), got {}",
-            expected_len,
-            width,
-            height,
-            num_channels,
-            data.len()
-        ));
-    }
+macro_rules! impl_decode_internal {
+    ($fn_name:ident, $t:ty, $bits:expr) => {
+        fn $fn_name(data: &[u8]) -> Result<DecodeResult<$t>, String> {
+            let runner = ThreadsRunner::default();
+            let decoder = decoder_builder()
+                .parallel_runner(&runner)
+                .icc_profile(true)
+                .build()
+                .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
-    let has_alpha = num_channels == 2 || num_channels == 4;
+            let (meta, pixel_data) = decoder
+                .decode_with::<$t>(data)
+                .map_err(|e| format!("Failed to decode: {e}"))?;
 
-    let runner = ThreadsRunner::default();
-    let mut encoder = encoder_builder()
-        .parallel_runner(&runner)
-        .speed(speed.into())
-        .has_alpha(has_alpha)
-        .build()
-        .map_err(|e| format!("Failed to create encoder: {e}"))?;
+            let total_channels = meta.num_color_channels + u32::from(meta.has_alpha_channel);
+            let (exif, xmp, icc_box) = extract_metadata(data);
+            let final_icc = icc_box.or(meta.icc_profile);
 
-    if lossless {
-        encoder.lossless = Some(true);
-        encoder.uses_original_profile = true;
-        encoder.quality = 0.0;
-    } else {
-        encoder.quality = quality;
-    }
+            let metadata = Metadata {
+                width: meta.width,
+                height: meta.height,
+                num_color_channels: meta.num_color_channels,
+                has_alpha: meta.has_alpha_channel,
+                exif,
+                xmp,
+                icc: final_icc,
+                bits_per_sample: $bits,
+                intensity_target: meta.intensity_target,
+                min_nits: meta.min_nits,
+            };
 
-    if let Some(e) = exif {
-        encoder
-            .add_metadata(&jpegxl_rs::encode::Metadata::Exif(e), true)
-            .map_err(|e| format!("Failed adding exif: {e}"))?;
-    }
-    if let Some(x) = xmp {
-        encoder
-            .add_metadata(&jpegxl_rs::encode::Metadata::Xmp(x), true)
-            .map_err(|e| format!("Failed adding xmp: {e}"))?;
-    }
-
-    let frame = EncoderFrame::new(data).num_channels(num_channels);
-    let result = encoder
-        .encode_frame::<u8, u8>(&frame, width, height)
-        .map_err(|e| format!("Failed to encode: {e}"))?;
-
-    Ok(result.data)
+            Ok(DecodeResult {
+                meta: metadata,
+                pixels: pixel_data,
+                total_channels,
+            })
+        }
+    };
 }
+
+impl_decode_internal!(decode_internal_u8, u8, 8);
+impl_decode_internal!(decode_internal_u16, u16, 16);
+impl_decode_internal!(decode_internal_f32, f32, 32);
+
+macro_rules! impl_encode_internal {
+    ($fn_name:ident, $t:ty) => {
+        fn $fn_name(
+            data: &[$t],
+            width: u32,
+            height: u32,
+            lossless: bool,
+            quality: f32,
+            speed: EncoderSpeed,
+            num_channels: u32,
+            exif: Option<&[u8]>,
+            xmp: Option<&[u8]>,
+            icc: Option<&[u8]>,
+        ) -> Result<Vec<u8>, String> {
+            let expected_len = (width * height * num_channels) as usize;
+            if data.len() != expected_len {
+                return Err(format!(
+                    "Data length mismatch: expected {} elements ({}x{}x{}), got {}",
+                    expected_len,
+                    width,
+                    height,
+                    num_channels,
+                    data.len()
+                ));
+            }
+
+            let has_alpha = num_channels == 2 || num_channels == 4;
+
+            let runner = ThreadsRunner::default();
+            let mut encoder = encoder_builder()
+                .parallel_runner(&runner)
+                .speed(speed.into())
+                .has_alpha(has_alpha)
+                .build()
+                .map_err(|e| format!("Failed to create encoder: {e}"))?;
+
+            if lossless {
+                encoder.lossless = Some(true);
+                encoder.uses_original_profile = true;
+                encoder.quality = 0.0;
+            } else {
+                encoder.quality = quality;
+            }
+
+            if let Some(e) = exif {
+                encoder
+                    .add_metadata(&jpegxl_rs::encode::Metadata::Exif(e), true)
+                    .map_err(|e| format!("Failed adding exif: {e}"))?;
+            }
+            if let Some(x) = xmp {
+                encoder
+                    .add_metadata(&jpegxl_rs::encode::Metadata::Xmp(x), true)
+                    .map_err(|e| format!("Failed adding xmp: {e}"))?;
+            }
+            if let Some(i) = icc {
+                encoder
+                    .add_metadata(&jpegxl_rs::encode::Metadata::Custom(*b"prof", i), false)
+                    .map_err(|e| format!("Failed adding icc: {e}"))?;
+            }
+
+            let frame = EncoderFrame::new(data).num_channels(num_channels);
+            let result = encoder
+                .encode_frame::<$t, $t>(&frame, width, height)
+                .map_err(|e| format!("Failed to encode: {e}"))?;
+
+            Ok(result.data)
+        }
+    };
+}
+
+impl_encode_internal!(encode_internal_u8, u8);
+impl_encode_internal!(encode_internal_u16, u16);
+impl_encode_internal!(encode_internal_f32, f32);
 
 // ---------------------------------------------------------------------------
 // Python API — bytes
@@ -301,18 +442,51 @@ fn encode_internal(
 /// The GIL is released during decoding for concurrency.
 /// Returns a tuple of (Metadata, bytes).
 #[pyfunction]
-fn decode<'py>(py: Python<'py>, data: &[u8]) -> PyResult<(Metadata, Bound<'py, PyBytes>)> {
-    let result = py
-        .detach(|| decode_internal(data))
-        .map_err(PyRuntimeError::new_err)?;
-    Ok((result.meta, PyBytes::new(py, &result.pixels)))
+#[pyo3(signature = (data, *, dtype = None))]
+fn decode<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    dtype: Option<&str>,
+) -> PyResult<(Metadata, Bound<'py, PyBytes>)> {
+    match dtype {
+        Some("uint16") => {
+            let result = py
+                .detach(|| decode_internal_u16(data))
+                .map_err(PyRuntimeError::new_err)?;
+            let bytes_slice = unsafe {
+                std::slice::from_raw_parts(
+                    result.pixels.as_ptr() as *const u8,
+                    result.pixels.len() * std::mem::size_of::<u16>(),
+                )
+            };
+            Ok((result.meta, PyBytes::new(py, bytes_slice)))
+        }
+        Some("float32") => {
+            let result = py
+                .detach(|| decode_internal_f32(data))
+                .map_err(PyRuntimeError::new_err)?;
+            let bytes_slice = unsafe {
+                std::slice::from_raw_parts(
+                    result.pixels.as_ptr() as *const u8,
+                    result.pixels.len() * std::mem::size_of::<f32>(),
+                )
+            };
+            Ok((result.meta, PyBytes::new(py, bytes_slice)))
+        }
+        _ => {
+            let result = py
+                .detach(|| decode_internal_u8(data))
+                .map_err(PyRuntimeError::new_err)?;
+            Ok((result.meta, PyBytes::new(py, &result.pixels)))
+        }
+    }
 }
 
 /// Encode raw pixel data to JPEG XL format.
 ///
 /// The GIL is released during encoding for concurrency.
 #[pyfunction]
-#[pyo3(signature = (data, width, height, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, num_channels = 4, exif = None, xmp = None))]
+#[pyo3(signature = (data, width, height, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, num_channels = 4, exif = None, xmp = None, icc = None))]
 fn encode<'py>(
     py: Python<'py>,
     data: &[u8],
@@ -324,10 +498,11 @@ fn encode<'py>(
     num_channels: u32,
     exif: Option<&[u8]>,
     xmp: Option<&[u8]>,
+    icc: Option<&[u8]>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let jxl = py
         .detach(|| {
-            encode_internal(
+            encode_internal_u8(
                 data,
                 width,
                 height,
@@ -337,6 +512,7 @@ fn encode<'py>(
                 num_channels,
                 exif,
                 xmp,
+                icc,
             )
         })
         .map_err(PyRuntimeError::new_err)?;
@@ -349,81 +525,230 @@ fn encode<'py>(
 
 /// Decode a JPEG XL image, returning a NumPy array.
 ///
-/// Returns (Metadata, ndarray) where ndarray has shape (H, W, C) and dtype uint8.
+/// Returns (Metadata, ndarray) where ndarray has shape (H, W, C).
+/// If dtype is None, automatically detects source image bit depth (uint8, uint16, or float32).
 /// The pixel buffer is transferred to NumPy via zero-copy ownership transfer.
 /// The GIL is released during decoding.
 #[pyfunction]
+#[pyo3(signature = (data, *, dtype = None))]
 fn decode_to_numpy<'py>(
     py: Python<'py>,
     data: &[u8],
-) -> PyResult<(Metadata, Bound<'py, PyArrayDyn<u8>>)> {
-    let result = py
-        .detach(|| decode_internal(data))
-        .map_err(PyRuntimeError::new_err)?;
-
-    let h = result.meta.height as usize;
-    let w = result.meta.width as usize;
-    let c = result.total_channels as usize;
-
-    // Zero-copy: ownership of Vec<u8> transfers to NumPy
-    let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
-
-    Ok((result.meta, array.into_pyarray(py)))
+    dtype: Option<&str>,
+) -> PyResult<(Metadata, Bound<'py, PyAny>)> {
+    match dtype {
+        Some("uint8") => {
+            let result = py
+                .detach(|| decode_internal_u8(data))
+                .map_err(PyRuntimeError::new_err)?;
+            let h = result.meta.height as usize;
+            let w = result.meta.width as usize;
+            let c = result.total_channels as usize;
+            let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+            Ok((result.meta, array.into_pyarray(py).into_any()))
+        }
+        Some("uint16") => {
+            let result = py
+                .detach(|| decode_internal_u16(data))
+                .map_err(PyRuntimeError::new_err)?;
+            let h = result.meta.height as usize;
+            let w = result.meta.width as usize;
+            let c = result.total_channels as usize;
+            let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+            Ok((result.meta, array.into_pyarray(py).into_any()))
+        }
+        Some("float32") => {
+            let result = py
+                .detach(|| decode_internal_f32(data))
+                .map_err(PyRuntimeError::new_err)?;
+            let h = result.meta.height as usize;
+            let w = result.meta.width as usize;
+            let c = result.total_channels as usize;
+            let array = ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), result.pixels)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}")))?;
+            Ok((result.meta, array.into_pyarray(py).into_any()))
+        }
+        _ => {
+            // Auto-detect bit depth and data type from JPEG XL codestream
+            let result = py
+                .detach(|| decode_auto(data))
+                .map_err(PyRuntimeError::new_err)?;
+            match result {
+                AutoDecodeResult::Uint8(res) => {
+                    let h = res.meta.height as usize;
+                    let w = res.meta.width as usize;
+                    let c = res.total_channels as usize;
+                    let array =
+                        ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), res.pixels)
+                            .map_err(|e| {
+                                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+                            })?;
+                    Ok((res.meta, array.into_pyarray(py).into_any()))
+                }
+                AutoDecodeResult::Uint16(res) => {
+                    let h = res.meta.height as usize;
+                    let w = res.meta.width as usize;
+                    let c = res.total_channels as usize;
+                    let array =
+                        ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), res.pixels)
+                            .map_err(|e| {
+                                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+                            })?;
+                    Ok((res.meta, array.into_pyarray(py).into_any()))
+                }
+                AutoDecodeResult::Float(res) => {
+                    let h = res.meta.height as usize;
+                    let w = res.meta.width as usize;
+                    let c = res.total_channels as usize;
+                    let array =
+                        ndarray::Array::from_shape_vec(ndarray::IxDyn(&[h, w, c]), res.pixels)
+                            .map_err(|e| {
+                                PyRuntimeError::new_err(format!("Failed to reshape pixels: {e}"))
+                            })?;
+                    Ok((res.meta, array.into_pyarray(py).into_any()))
+                }
+            }
+        }
+    }
 }
 
-/// Encode a NumPy array (H, W, C) of uint8 to JPEG XL.
+/// Encode a NumPy array (H, W, C) of uint8, uint16, or float32 to JPEG XL.
 ///
 /// Reads from the NumPy array via zero-copy (if C-contiguous).
 /// The GIL is released during encoding.
 #[pyfunction]
-#[pyo3(signature = (array, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, exif = None, xmp = None))]
+#[pyo3(signature = (array, *, lossless = false, quality = 1.0, speed = EncoderSpeed::Squirrel, exif = None, xmp = None, icc = None))]
 fn encode_from_numpy<'py>(
     py: Python<'py>,
-    array: PyReadonlyArrayDyn<'py, u8>,
+    array: &Bound<'py, PyAny>,
     lossless: bool,
     quality: f32,
     speed: EncoderSpeed,
     exif: Option<&[u8]>,
     xmp: Option<&[u8]>,
+    icc: Option<&[u8]>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let shape = array.shape();
-    if shape.len() != 3 {
-        return Err(PyRuntimeError::new_err(format!(
-            "Expected 3D array (H, W, C), got {}D",
-            shape.len()
-        )));
+    if let Ok(arr_u8) = array.extract::<PyReadonlyArrayDyn<'py, u8>>() {
+        let shape = arr_u8.shape();
+        if shape.len() != 3 {
+            return Err(PyRuntimeError::new_err(format!(
+                "Expected 3D array (H, W, C), got {}D",
+                shape.len()
+            )));
+        }
+        let height = shape[0] as u32;
+        let width = shape[1] as u32;
+        let num_channels = shape[2] as u32;
+
+        let array_view = arr_u8.as_array();
+        if !array_view.is_standard_layout() {
+            return Err(PyRuntimeError::new_err(
+                "Array must be C-contiguous. Use numpy.ascontiguousarray().",
+            ));
+        }
+        let data = array_view.as_slice().unwrap();
+
+        let jxl = py
+            .detach(|| {
+                encode_internal_u8(
+                    data,
+                    width,
+                    height,
+                    lossless,
+                    quality,
+                    speed,
+                    num_channels,
+                    exif,
+                    xmp,
+                    icc,
+                )
+            })
+            .map_err(PyRuntimeError::new_err)?;
+
+        Ok(PyBytes::new(py, &jxl))
+    } else if let Ok(arr_u16) = array.extract::<PyReadonlyArrayDyn<'py, u16>>() {
+        let shape = arr_u16.shape();
+        if shape.len() != 3 {
+            return Err(PyRuntimeError::new_err(format!(
+                "Expected 3D array (H, W, C), got {}D",
+                shape.len()
+            )));
+        }
+        let height = shape[0] as u32;
+        let width = shape[1] as u32;
+        let num_channels = shape[2] as u32;
+
+        let array_view = arr_u16.as_array();
+        if !array_view.is_standard_layout() {
+            return Err(PyRuntimeError::new_err(
+                "Array must be C-contiguous. Use numpy.ascontiguousarray().",
+            ));
+        }
+        let data = array_view.as_slice().unwrap();
+
+        let jxl = py
+            .detach(|| {
+                encode_internal_u16(
+                    data,
+                    width,
+                    height,
+                    lossless,
+                    quality,
+                    speed,
+                    num_channels,
+                    exif,
+                    xmp,
+                    icc,
+                )
+            })
+            .map_err(PyRuntimeError::new_err)?;
+
+        Ok(PyBytes::new(py, &jxl))
+    } else if let Ok(arr_f32) = array.extract::<PyReadonlyArrayDyn<'py, f32>>() {
+        let shape = arr_f32.shape();
+        if shape.len() != 3 {
+            return Err(PyRuntimeError::new_err(format!(
+                "Expected 3D array (H, W, C), got {}D",
+                shape.len()
+            )));
+        }
+        let height = shape[0] as u32;
+        let width = shape[1] as u32;
+        let num_channels = shape[2] as u32;
+
+        let array_view = arr_f32.as_array();
+        if !array_view.is_standard_layout() {
+            return Err(PyRuntimeError::new_err(
+                "Array must be C-contiguous. Use numpy.ascontiguousarray().",
+            ));
+        }
+        let data = array_view.as_slice().unwrap();
+
+        let jxl = py
+            .detach(|| {
+                encode_internal_f32(
+                    data,
+                    width,
+                    height,
+                    lossless,
+                    quality,
+                    speed,
+                    num_channels,
+                    exif,
+                    xmp,
+                    icc,
+                )
+            })
+            .map_err(PyRuntimeError::new_err)?;
+
+        Ok(PyBytes::new(py, &jxl))
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "Unsupported array dtype. Supported dtypes are uint8, uint16, and float32.",
+        ))
     }
-    let height = shape[0] as u32;
-    let width = shape[1] as u32;
-    let num_channels = shape[2] as u32;
-
-    // Get contiguous data — zero-copy if already C-contiguous
-    let array_view = array.as_array();
-    if !array_view.is_standard_layout() {
-        return Err(PyRuntimeError::new_err(
-            "Array must be C-contiguous. Use numpy.ascontiguousarray().",
-        ));
-    }
-    let data = array_view.as_slice().unwrap();
-
-    let jxl = py
-        .detach(|| {
-            encode_internal(
-                data,
-                width,
-                height,
-                lossless,
-                quality,
-                speed,
-                num_channels,
-                exif,
-                xmp,
-            )
-        })
-        .map_err(PyRuntimeError::new_err)?;
-
-    Ok(PyBytes::new(py, &jxl))
 }
 
 // ---------------------------------------------------------------------------
@@ -651,8 +976,7 @@ fn jxl_to_jpeg_internal(jxl_data: &[u8]) -> Result<Vec<u8>, String> {
         }
 
         // Initial JPEG buffer — we'll grow it as needed
-        let mut jpeg_buf: Vec<u8> = Vec::with_capacity(jxl_data.len() * 2);
-        jpeg_buf.resize(jpeg_buf.capacity(), 0u8);
+        let mut jpeg_buf: Vec<u8> = vec![0u8; jxl_data.len() * 2];
         let mut jpeg_buf_offset = 0usize;
         let mut got_jpeg_reconstruction = false;
 

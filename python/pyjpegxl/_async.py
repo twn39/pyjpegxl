@@ -45,9 +45,9 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-async def async_decode(data: bytes) -> tuple[Metadata, bytes]:
+async def async_decode(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
     """Async decode JXL bytes → (Metadata, pixel bytes)."""
-    return await asyncio.to_thread(decode, data)
+    return await asyncio.to_thread(decode, data, dtype=dtype)
 
 
 async def async_encode(
@@ -61,6 +61,7 @@ async def async_encode(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> bytes:
     """Async encode pixel bytes → JXL bytes."""
     return await asyncio.to_thread(
@@ -74,12 +75,13 @@ async def async_encode(
         num_channels=num_channels,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
 
 
-async def async_decode_to_numpy(data: bytes) -> tuple[Metadata, np.ndarray]:
+async def async_decode_to_numpy(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, np.ndarray]:
     """Async decode JXL bytes → (Metadata, numpy.ndarray)."""
-    return await asyncio.to_thread(decode_to_numpy, data)
+    return await asyncio.to_thread(decode_to_numpy, data, dtype=dtype)
 
 
 async def async_encode_from_numpy(
@@ -90,6 +92,7 @@ async def async_encode_from_numpy(
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> bytes:
     """Async encode numpy.ndarray → JXL bytes."""
     return await asyncio.to_thread(
@@ -100,6 +103,7 @@ async def async_encode_from_numpy(
         speed=speed,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
 
 
@@ -108,14 +112,14 @@ async def async_encode_from_numpy(
 # ---------------------------------------------------------------------------
 
 
-async def async_read(path: str | os.PathLike) -> tuple[Metadata, bytes]:
+async def async_read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
     """Async read a JXL file → (Metadata, pixel bytes)."""
-    return await asyncio.to_thread(read, path)
+    return await asyncio.to_thread(read, path, dtype=dtype)
 
 
-async def async_read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, np.ndarray]:
+async def async_read_to_numpy(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, np.ndarray]:
     """Async read a JXL file → (Metadata, numpy.ndarray)."""
-    return await asyncio.to_thread(read_to_numpy, path)
+    return await asyncio.to_thread(read_to_numpy, path, dtype=dtype)
 
 
 async def async_write(
@@ -130,6 +134,7 @@ async def async_write(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int:
     """Async encode pixel bytes and write to a JXL file."""
     return await asyncio.to_thread(
@@ -144,6 +149,7 @@ async def async_write(
         num_channels=num_channels,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
 
 
@@ -156,6 +162,7 @@ async def async_write_from_numpy(
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int:
     """Async encode numpy.ndarray and write to a JXL file."""
     return await asyncio.to_thread(
@@ -167,6 +174,7 @@ async def async_write_from_numpy(
         speed=speed,
         exif=exif,
         xmp=xmp,
+        icc=icc,
     )
 
 

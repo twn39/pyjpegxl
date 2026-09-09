@@ -21,8 +21,13 @@ class Metadata:
     height: int
     num_color_channels: int
     has_alpha: bool
+    bits_per_sample: int
+    intensity_target: float
+    min_nits: float
     exif: bytes | None
     xmp: bytes | None
+    icc: bytes | None
+    icc_profile: bytes | None
 
 class EncoderSpeed(IntEnum):
     """Encoder speed presets (fastest → slowest)."""
@@ -52,8 +57,8 @@ class JpegInfo:
 # JXL — Sync bytes API
 # ===========================================================================
 
-def decode(data: bytes) -> tuple[Metadata, bytes]:
-    """Decode JXL bytes → (Metadata, raw pixel bytes u8)."""
+def decode(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
+    """Decode JXL bytes → (Metadata, raw pixel bytes)."""
     ...
 
 def encode(
@@ -67,6 +72,8 @@ def encode(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
+    dtype: str | None = None,
 ) -> bytes:
     """Encode raw pixel bytes → JXL bytes."""
     ...
@@ -75,32 +82,41 @@ def encode(
 # JXL — Sync NumPy API (zero-copy)
 # ===========================================================================
 
-def decode_to_numpy(data: bytes) -> tuple[Metadata, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]:
-    """Decode JXL bytes → (Metadata, ndarray shape (H,W,C) dtype uint8). Zero-copy."""
+def decode_to_numpy(
+    data: bytes,
+    *,
+    dtype: str | None = None,
+) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]:
+    """Decode JXL bytes → (Metadata, ndarray shape (H,W,C)). Zero-copy."""
     ...
 
 def encode_from_numpy(
-    array: npt.NDArray[np.uint8],
+    array: npt.NDArray[np.uint8 | np.uint16 | np.float32],
     *,
     lossless: bool = False,
     quality: float = 1.0,
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> bytes:
-    """Encode ndarray (H,W,C) uint8 → JXL bytes. Zero-copy read."""
+    """Encode ndarray (H,W,C) (uint8, uint16, float32) → JXL bytes."""
     ...
 
 # ===========================================================================
 # JXL — Sync file I/O
 # ===========================================================================
 
-def read(path: str | os.PathLike) -> tuple[Metadata, bytes]:
+def read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]:
     """Read a JXL file → (Metadata, raw pixel bytes)."""
     ...
 
-def read_to_numpy(path: str | os.PathLike) -> tuple[Metadata, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]:
-    """Read a JXL file → (Metadata, ndarray shape (H,W,C) dtype uint8)."""
+def read_to_numpy(
+    path: str | os.PathLike,
+    *,
+    dtype: str | None = None,
+) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]:
+    """Read a JXL file → (Metadata, ndarray shape (H,W,C))."""
     ...
 
 def write(
@@ -115,19 +131,22 @@ def write(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
+    dtype: str | None = None,
 ) -> int:
     """Encode raw pixel bytes and write to a JXL file. Returns bytes written."""
     ...
 
 def write_from_numpy(
     path: str | os.PathLike,
-    array: npt.NDArray[np.uint8],
+    array: npt.NDArray[np.uint8 | np.uint16 | np.float32],
     *,
     lossless: bool = False,
     quality: float = 1.0,
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int:
     """Encode ndarray and write to a JXL file. Returns bytes written."""
     ...
@@ -206,7 +225,7 @@ def jpeg_write_from_numpy(
 # JXL — Async wrappers
 # ===========================================================================
 
-async def async_decode(data: bytes) -> tuple[Metadata, bytes]: ...
+async def async_decode(data: bytes, *, dtype: str | None = None) -> tuple[Metadata, bytes]: ...
 async def async_encode(
     data: bytes,
     width: int,
@@ -218,23 +237,30 @@ async def async_encode(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
+    dtype: str | None = None,
 ) -> bytes: ...
 async def async_decode_to_numpy(
     data: bytes,
-) -> tuple[Metadata, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]: ...
+    *,
+    dtype: str | None = None,
+) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]: ...
 async def async_encode_from_numpy(
-    array: npt.NDArray[np.uint8],
+    array: npt.NDArray[np.uint8 | np.uint16 | np.float32],
     *,
     lossless: bool = False,
     quality: float = 1.0,
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> bytes: ...
-async def async_read(path: str | os.PathLike) -> tuple[Metadata, bytes]: ...
+async def async_read(path: str | os.PathLike, *, dtype: str | None = None) -> tuple[Metadata, bytes]: ...
 async def async_read_to_numpy(
     path: str | os.PathLike,
-) -> tuple[Metadata, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]: ...
+    *,
+    dtype: str | None = None,
+) -> tuple[Metadata, npt.NDArray[np.uint8 | np.uint16 | np.float32]]: ...
 async def async_write(
     path: str | os.PathLike,
     data: bytes,
@@ -247,16 +273,19 @@ async def async_write(
     num_channels: int = 4,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
+    dtype: str | None = None,
 ) -> int: ...
 async def async_write_from_numpy(
     path: str | os.PathLike,
-    array: npt.NDArray[np.uint8],
+    array: npt.NDArray[np.uint8 | np.uint16 | np.float32],
     *,
     lossless: bool = False,
     quality: float = 1.0,
     speed: EncoderSpeed = EncoderSpeed.Squirrel,
     exif: bytes | None = None,
     xmp: bytes | None = None,
+    icc: bytes | None = None,
 ) -> int: ...
 
 # ===========================================================================
@@ -338,3 +367,5 @@ async def async_jxl_file_to_jpeg(
     jxl_path: str | os.PathLike,
     jpeg_path: str | os.PathLike,
 ) -> int: ...
+
+__version__: str

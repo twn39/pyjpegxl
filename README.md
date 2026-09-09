@@ -55,7 +55,9 @@ jxl_data = pyjpegxl.encode(pixels, width=meta.width, height=meta.height)
 
 # Custom Encode
 jxl_data = pyjpegxl.encode(
-    pixels, width=meta.width, height=meta.height,
+    pixels,
+    width=meta.width,
+    height=meta.height,
     lossless=True,
     speed=pyjpegxl.EncoderSpeed.Falcon,
 )
@@ -73,10 +75,10 @@ with open("image.jxl", "rb") as f:
     # Decode directly into a NumPy array (H, W, C)
     meta, arr = pyjpegxl.decode_to_numpy(f.read())
 
-print(arr.shape, arr.dtype) # e.g. (1080, 1920, 3), dtype('uint8')
+print(arr.shape, arr.dtype)  # e.g. (1080, 1920, 3), dtype('uint8')
 
 # Encode directly from a C-contiguous NumPy array
-jxl_data = pyjpegxl.encode_from_numpy(arr, quality=1.0) # quality=1.0 is default for visually lossless
+jxl_data = pyjpegxl.encode_from_numpy(arr, quality=1.0)  # quality=1.0 is default for visually lossless
 ```
 
 ### File I/O API
@@ -95,8 +97,13 @@ pyjpegxl.write_from_numpy("output.jxl", arr, lossless=True)
 
 # Bytes-level file I/O
 meta, pixels = pyjpegxl.read("image.jxl")
-pyjpegxl.write("output.jxl", pixels, width=meta.width, height=meta.height,
-               num_channels=meta.num_color_channels + int(meta.has_alpha))
+pyjpegxl.write(
+    "output.jxl",
+    pixels,
+    width=meta.width,
+    height=meta.height,
+    num_channels=meta.num_color_channels + int(meta.has_alpha),
+)
 ```
 
 ### Async API
@@ -107,17 +114,19 @@ Perfect for high-concurrency web servers like FastAPI or Starlette.
 import asyncio
 import pyjpegxl
 
+
 async def process_image():
     with open("image.jxl", "rb") as f:
         data = f.read()
-        
+
     # Non-blocking decode
     meta, arr = await pyjpegxl.async_decode_to_numpy(data)
-    
+
     # Non-blocking encode
     out_jxl = await pyjpegxl.async_encode_from_numpy(arr)
-    
+
     return out_jxl
+
 
 asyncio.run(process_image())
 ```
