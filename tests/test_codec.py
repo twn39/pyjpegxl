@@ -736,3 +736,124 @@ class TestPerformanceAndConcurrency:
         meta4 = await pyjpegxl.async_read_into(jxl_file, out_file)
         assert meta4.height == expected_arr.shape[0]
         assert np.array_equal(out_file, expected_arr)
+
+
+class TestNewOptimizations:
+    """Tests for the newly introduced optimizations and feature alignments."""
+
+    @pytest.fixture
+    def jpeg_rgb_arr(self):
+        rng = np.random.default_rng(42)
+        return rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8)
+
+    def test_decode_auto_dtype_bytes_16bit(self):
+        rng = np.random.default_rng(42)
+        arr16 = rng.integers(0, 65536, size=(16, 16, 3), dtype=np.uint16)
+        jxl16 = pyjpegxl.encode_from_numpy(arr16, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+
+        # decode with dtype=None should NOT downsample to uint8
+        meta, pixel_bytes = pyjpegxl.decode(jxl16)
+        assert meta.bits_per_sample == 16
+        assert len(pixel_bytes) == 16 * 16 * 3 * 2
+        decoded_arr = np.frombuffer(pixel_bytes, dtype=np.uint16).reshape((16, 16, 3))
+        assert np.array_equal(decoded_arr, arr16)
+
+    def test_decode_auto_dtype_bytes_float32(self):
+        rng = np.random.default_rng(42)
+        arr_f32 = rng.random(size=(16, 16, 3), dtype=np.float32)
+        jxl_f32 = pyjpegxl.encode_from_numpy(arr_f32, lossless=True, speed=pyjpegxl.EncoderSpeed.Lightning)
+
+        meta, pixel_bytes = pyjpegxl.decode(jxl_f32)
+        assert meta.bits_per_sample == 32
+        assert len(pixel_bytes) == 16 * 16 * 3 * 4
+        decoded_arr = np.frombuffer(pixel_bytes, dtype=np.float32).reshape((16, 16, 3))
+        assert np.allclose(decoded_arr, arr_f32, atol=1e-4)
+
+    def test_jpeg_grayscale(self, tmp_path):
+        gray_arr = np.full((32, 32), 100, dtype=np.uint8)
+        jpeg_file = tmp_path / "gray.jpg"
+
+        # Write grayscale via jpeg_write_from_numpy
+        pyjpegxl.jpeg_write_from_numpy(jpeg_file, gray_arr, quality=95)
+        jpeg_bytes = jpeg_file.read_bytes()
+
+        # Probe
+        info_probe = pyjpegxl.jpeg_probe(jpeg_bytes)
+        assert info_probe.width == 32
+        assert info_probe.height == 32
+        assert info_probe.num_channels == 1
+
+        info_file = pyjpegxl.jpeg_probe_file(jpeg_file)
+        assert info_file.num_channels == 1
+
+        # Decode
+        info_dec, dec_bytes = pyjpegxl.jpeg_decode(jpeg_bytes)
+        assert info_dec.num_channels == 1
+        assert len(dec_bytes) == 32 * 32
+
+        # Decode to numpy
+        info_np, dec_np = pyjpegxl.jpeg_decode_to_numpy(jpeg_bytes)
+        assert info_np.num_channels == 1
+        assert dec_np.shape == (32, 32, 1)
+
+        # Decode expanding to RGB (channels=3)
+        info_rgb, dec_rgb = pyjpegxl.jpeg_decode_to_numpy(jpeg_bytes, channels=3)
+        assert info_rgb.num_channels == 3
+        assert dec_rgb.shape == (32, 32, 3)
+
+    def test_jpeg_decode_into_and_read_into(self, jpeg_rgb_arr, tmp_path):
+        jpeg_file = tmp_path / "test_into.jpg"
+        pyjpegxl.jpeg_write_from_numpy(jpeg_file, jpeg_rgb_arr, quality=90)
+        jpeg_bytes = jpeg_file.read_bytes()
+
+        h, w, c = jpeg_rgb_arr.shape
+        out_buf = np.zeros((h, w, c), dtype=np.uint8)
+
+        info = pyjpegxl.jpeg_decode_into(jpeg_bytes, out_buf)
+        assert info.width == w
+        assert info.height == h
+        assert info.num_channels == c
+
+        _, expected_arr = pyjpegxl.jpeg_decode_to_numpy(jpeg_bytes)
+        assert np.array_equal(out_buf, expected_arr)
+
+        # Test jpeg_read_into
+        out_buf_file = np.zeros((h, w, c), dtype=np.uint8)
+        info_file = pyjpegxl.jpeg_read_into(jpeg_file, out_buf_file)
+        assert info_file.width == w
+        assert np.array_equal(out_buf_file, expected_arr)
+
+    def test_jpeg_write_non_contiguous(self, tmp_path):
+        base = np.zeros((32, 32, 3), dtype=np.uint8)
+        non_contiguous = base[::2, ::2]  # slice with step
+        assert not non_contiguous.flags["C_CONTIGUOUS"]
+
+        dest = tmp_path / "non_contiguous.jpg"
+        bytes_written = pyjpegxl.jpeg_write_from_numpy(dest, non_contiguous)
+        assert bytes_written > 0
+        assert dest.exists()
+
+    @pytest.mark.asyncio
+    async def test_async_jpeg_features(self, jpeg_rgb_arr, tmp_path):
+        jpeg_file = tmp_path / "async_jpeg.jpg"
+        pyjpegxl.jpeg_write_from_numpy(jpeg_file, jpeg_rgb_arr, quality=90)
+        jpeg_bytes = jpeg_file.read_bytes()
+
+        # Async probe
+        info1 = await pyjpegxl.async_jpeg_probe(jpeg_bytes)
+        assert info1.width == jpeg_rgb_arr.shape[1]
+
+        info2 = await pyjpegxl.async_jpeg_probe_file(jpeg_file)
+        assert info2.height == jpeg_rgb_arr.shape[0]
+
+        # Async decode_into
+        out = np.zeros_like(jpeg_rgb_arr)
+        info3 = await pyjpegxl.async_jpeg_decode_into(jpeg_bytes, out)
+        assert info3.width == jpeg_rgb_arr.shape[1]
+
+        # Async read_into
+        out_file = np.zeros_like(jpeg_rgb_arr)
+        info4 = await pyjpegxl.async_jpeg_read_into(jpeg_file, out_file)
+        assert info4.width == jpeg_rgb_arr.shape[1]
+        assert np.array_equal(out, out_file)
+

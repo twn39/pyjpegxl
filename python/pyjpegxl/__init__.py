@@ -9,11 +9,15 @@ from pyjpegxl._async import (
     async_encode_from_numpy,
     # JPEG async
     async_jpeg_decode,
+    async_jpeg_decode_into,
     async_jpeg_decode_to_numpy,
     async_jpeg_encode,
     async_jpeg_encode_from_numpy,
     async_jpeg_file_to_jxl,
+    async_jpeg_probe,
+    async_jpeg_probe_file,
     async_jpeg_read,
+    async_jpeg_read_into,
     async_jpeg_read_to_numpy,
     # JPEG ↔ JXL transcoding async
     async_jpeg_to_jxl,
@@ -40,7 +44,9 @@ from pyjpegxl._io import (
     write_from_numpy,
 )
 from pyjpegxl._jpeg_io import (
+    jpeg_probe_file,
     jpeg_read,
+    jpeg_read_into,
     jpeg_read_to_numpy,
     jpeg_write,
     jpeg_write_from_numpy,
@@ -61,9 +67,12 @@ from pyjpegxl._pyjpegxl import (
     get_num_threads,
     # JPEG codec
     jpeg_decode,
+    jpeg_decode_into,
     jpeg_decode_to_numpy,
     jpeg_encode,
     jpeg_encode_from_numpy,
+    # JPEG metadata probing
+    jpeg_probe,
     # JPEG ↔ JXL lossless transcoding
     jpeg_to_jxl,
     jxl_to_jpeg,
@@ -106,12 +115,22 @@ __all__ = [
     # Concurrency control
     "set_num_threads",
     "get_num_threads",
+    # JPEG — fast metadata probing
+    "jpeg_probe",
+    "jpeg_probe_file",
+    "async_jpeg_probe",
+    "async_jpeg_probe_file",
     # JPEG — sync bytes API
     "jpeg_decode",
     "jpeg_encode",
     # JPEG — sync NumPy API
     "jpeg_decode_to_numpy",
     "jpeg_encode_from_numpy",
+    # JPEG — zero-allocation in-place decode
+    "jpeg_decode_into",
+    "jpeg_read_into",
+    "async_jpeg_decode_into",
+    "async_jpeg_read_into",
     # JPEG — sync file I/O
     "jpeg_read",
     "jpeg_read_to_numpy",

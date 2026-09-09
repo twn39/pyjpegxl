@@ -21,7 +21,9 @@ from pyjpegxl._io import (
     write_from_numpy,
 )
 from pyjpegxl._jpeg_io import (
+    jpeg_probe_file,
     jpeg_read,
+    jpeg_read_into,
     jpeg_read_to_numpy,
     jpeg_write,
     jpeg_write_from_numpy,
@@ -36,9 +38,11 @@ from pyjpegxl._pyjpegxl import (
     encode,
     encode_from_numpy,
     jpeg_decode,
+    jpeg_decode_into,
     jpeg_decode_to_numpy,
     jpeg_encode,
     jpeg_encode_from_numpy,
+    jpeg_probe,
     jpeg_to_jxl,
     jxl_to_jpeg,
     probe,
@@ -219,9 +223,24 @@ async def async_write_from_numpy(
 # ---------------------------------------------------------------------------
 
 
-async def async_jpeg_decode(data: bytes) -> tuple[JpegInfo, bytes]:
+async def async_jpeg_probe(data: bytes) -> JpegInfo:
+    """Async fast JPEG metadata inspection without decoding pixel data."""
+    return await asyncio.to_thread(jpeg_probe, data)
+
+
+async def async_jpeg_probe_file(path: str | os.PathLike) -> JpegInfo:
+    """Async fast JPEG file metadata inspection without decoding pixel data."""
+    return await asyncio.to_thread(jpeg_probe_file, path)
+
+
+async def async_jpeg_decode(data: bytes, *, channels: int | None = None) -> tuple[JpegInfo, bytes]:
     """Async decode JPEG bytes → (JpegInfo, pixel bytes)."""
-    return await asyncio.to_thread(jpeg_decode, data)
+    return await asyncio.to_thread(jpeg_decode, data, channels=channels)
+
+
+async def async_jpeg_decode_into(data: bytes, out: np.ndarray) -> JpegInfo:
+    """Async decode JPEG bytes directly into preallocated NumPy array."""
+    return await asyncio.to_thread(jpeg_decode_into, data, out)
 
 
 async def async_jpeg_encode(
@@ -243,9 +262,11 @@ async def async_jpeg_encode(
     )
 
 
-async def async_jpeg_decode_to_numpy(data: bytes) -> tuple[JpegInfo, np.ndarray]:
+async def async_jpeg_decode_to_numpy(
+    data: bytes, *, channels: int | None = None
+) -> tuple[JpegInfo, np.ndarray]:
     """Async decode JPEG bytes → (JpegInfo, numpy.ndarray)."""
-    return await asyncio.to_thread(jpeg_decode_to_numpy, data)
+    return await asyncio.to_thread(jpeg_decode_to_numpy, data, channels=channels)
 
 
 async def async_jpeg_encode_from_numpy(
@@ -266,14 +287,23 @@ async def async_jpeg_encode_from_numpy(
 # ---------------------------------------------------------------------------
 
 
-async def async_jpeg_read(path: str | os.PathLike) -> tuple[JpegInfo, bytes]:
+async def async_jpeg_read(
+    path: str | os.PathLike, *, channels: int | None = None
+) -> tuple[JpegInfo, bytes]:
     """Async read a JPEG file → (JpegInfo, pixel bytes)."""
-    return await asyncio.to_thread(jpeg_read, path)
+    return await asyncio.to_thread(jpeg_read, path, channels=channels)
 
 
-async def async_jpeg_read_to_numpy(path: str | os.PathLike) -> tuple[JpegInfo, np.ndarray]:
+async def async_jpeg_read_to_numpy(
+    path: str | os.PathLike, *, channels: int | None = None
+) -> tuple[JpegInfo, np.ndarray]:
     """Async read a JPEG file → (JpegInfo, numpy.ndarray)."""
-    return await asyncio.to_thread(jpeg_read_to_numpy, path)
+    return await asyncio.to_thread(jpeg_read_to_numpy, path, channels=channels)
+
+
+async def async_jpeg_read_into(path: str | os.PathLike, out: np.ndarray) -> JpegInfo:
+    """Async read a JPEG file directly into preallocated NumPy array."""
+    return await asyncio.to_thread(jpeg_read_into, path, out)
 
 
 async def async_jpeg_write(

@@ -52,6 +52,9 @@ class JpegInfo:
     width: int
     height: int
     num_channels: int
+    exif: bytes | None
+    icc: bytes | None
+    icc_profile: bytes | None
 
 # ===========================================================================
 # Fast Metadata Probing
@@ -66,6 +69,14 @@ def probe(data: bytes) -> Metadata:
 
 def probe_file(path: str | os.PathLike) -> Metadata:
     """Fast metadata inspection of a JXL file without decoding pixel data."""
+    ...
+
+def jpeg_probe(data: bytes) -> JpegInfo:
+    """Fast metadata inspection of a JPEG without decoding pixel data."""
+    ...
+
+def jpeg_probe_file(path: str | os.PathLike) -> JpegInfo:
+    """Fast metadata inspection of a JPEG file without decoding pixel data."""
     ...
 
 # ===========================================================================
@@ -227,8 +238,19 @@ def jpeg_encode(
 # JPEG — Sync NumPy API
 # ===========================================================================
 
-def jpeg_decode_to_numpy(data: bytes) -> tuple[JpegInfo, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]:
+def jpeg_decode_to_numpy(
+    data: bytes,
+    *,
+    channels: int | None = None,
+) -> tuple[JpegInfo, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]:
     """Decode JPEG bytes → (JpegInfo, ndarray shape (H,W,C) dtype uint8)."""
+    ...
+
+def jpeg_decode_into(
+    data: bytes,
+    out: npt.NDArray[np.uint8],
+) -> JpegInfo:
+    """Decode JPEG bytes directly into preallocated writable NumPy array."""
     ...
 
 def jpeg_encode_from_numpy(
@@ -243,14 +265,23 @@ def jpeg_encode_from_numpy(
 # JPEG — Sync file I/O
 # ===========================================================================
 
-def jpeg_read(path: str | os.PathLike) -> tuple[JpegInfo, bytes]:
+def jpeg_read(path: str | os.PathLike, *, channels: int | None = None) -> tuple[JpegInfo, bytes]:
     """Read a JPEG file → (JpegInfo, raw pixel bytes)."""
     ...
 
 def jpeg_read_to_numpy(
     path: str | os.PathLike,
+    *,
+    channels: int | None = None,
 ) -> tuple[JpegInfo, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]:
     """Read a JPEG file → (JpegInfo, ndarray shape (H,W,C) dtype uint8)."""
+    ...
+
+def jpeg_read_into(
+    path: str | os.PathLike,
+    out: npt.NDArray[np.uint8],
+) -> JpegInfo:
+    """Read a JPEG file directly into preallocated writable NumPy array."""
     ...
 
 def jpeg_write(
@@ -359,7 +390,10 @@ async def async_write_from_numpy(
 # JPEG — Async wrappers
 # ===========================================================================
 
-async def async_jpeg_decode(data: bytes) -> tuple[JpegInfo, bytes]: ...
+async def async_jpeg_probe(data: bytes) -> JpegInfo: ...
+async def async_jpeg_probe_file(path: str | os.PathLike) -> JpegInfo: ...
+async def async_jpeg_decode(data: bytes, *, channels: int | None = None) -> tuple[JpegInfo, bytes]: ...
+async def async_jpeg_decode_into(data: bytes, out: npt.NDArray[np.uint8]) -> JpegInfo: ...
 async def async_jpeg_encode(
     data: bytes,
     width: int,
@@ -370,16 +404,21 @@ async def async_jpeg_encode(
 ) -> bytes: ...
 async def async_jpeg_decode_to_numpy(
     data: bytes,
+    *,
+    channels: int | None = None,
 ) -> tuple[JpegInfo, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]: ...
 async def async_jpeg_encode_from_numpy(
     array: npt.NDArray[np.uint8],
     *,
     quality: int = 95,
 ) -> bytes: ...
-async def async_jpeg_read(path: str | os.PathLike) -> tuple[JpegInfo, bytes]: ...
+async def async_jpeg_read(path: str | os.PathLike, *, channels: int | None = None) -> tuple[JpegInfo, bytes]: ...
 async def async_jpeg_read_to_numpy(
     path: str | os.PathLike,
+    *,
+    channels: int | None = None,
 ) -> tuple[JpegInfo, np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]]: ...
+async def async_jpeg_read_into(path: str | os.PathLike, out: npt.NDArray[np.uint8]) -> JpegInfo: ...
 async def async_jpeg_write(
     path: str | os.PathLike,
     data: bytes,
