@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import os
+from collections.abc import Sequence
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
@@ -473,5 +475,88 @@ async def async_jxl_file_to_jpeg(
     jxl_path: str | os.PathLike,
     jpeg_path: str | os.PathLike,
 ) -> int: ...
+
+# ===========================================================================
+# Unified Polymorphic I/O & Sniffing
+# ===========================================================================
+
+def sniff_bytes(header: bytes) -> str: ...
+def sniff_stream(stream: io.IOBase) -> tuple[str, io.IOBase]: ...
+def sniff_source(source: str | os.PathLike | bytes | io.IOBase) -> tuple[str, bytes]: ...
+
+class PrefixedStream(io.RawIOBase):
+    def __init__(self, prefix: bytes, raw_stream: io.IOBase) -> None: ...
+    def read(self, size: int = -1) -> bytes: ...
+    def readinto(self, b: bytearray | memoryview) -> int: ...
+    def seekable(self) -> bool: ...
+    def readable(self) -> bool: ...
+    def writable(self) -> bool: ...
+    def close(self) -> None: ...
+
+def imread(
+    source: str | os.PathLike | bytes | io.IOBase,
+    *,
+    dtype: str | None = None,
+    channels: int | None = None,
+) -> tuple[Metadata | JpegInfo, npt.NDArray[np.generic]]: ...
+def imwrite(
+    dest: str | os.PathLike | io.IOBase,
+    image: npt.NDArray[np.generic],
+    *,
+    format: str | None = None,
+    quality: float | None = None,
+    lossless: bool = False,
+    speed: EncoderSpeed = EncoderSpeed.Squirrel,
+    **kwargs: Any,
+) -> None: ...
+def probe_image(
+    source: str | os.PathLike | bytes | io.IOBase,
+) -> Metadata | JpegInfo: ...
+
+# ===========================================================================
+# Ecosystem Bridges: Pillow & PyTorch
+# ===========================================================================
+
+def to_pil(
+    image_or_array: npt.NDArray[np.generic] | bytes,
+    metadata: Any = None,
+    *,
+    preserve_hdr: bool = True,
+) -> Any: ...
+def from_pil(image: Any) -> tuple[npt.NDArray[np.generic], dict[str, Any]]: ...
+def to_tensor(
+    array_or_bytes: npt.NDArray[np.generic] | bytes,
+    *,
+    permute_chw: bool = False,
+    channels_last: bool = False,
+    normalize: bool = False,
+    device: Any = None,
+) -> Any: ...
+def from_tensor(tensor: Any) -> npt.NDArray[np.generic]: ...
+def decode_into_tensor(
+    data: bytes,
+    tensor: Any,
+    *,
+    is_jpeg: bool | None = None,
+) -> Metadata | JpegInfo: ...
+
+# ===========================================================================
+# High-Throughput Batch Operations
+# ===========================================================================
+
+def read_batch(
+    sources: Sequence[str | os.PathLike | bytes],
+    *,
+    max_workers: int | None = None,
+    dtype: str | None = None,
+    channels: int | None = None,
+) -> list[tuple[Metadata | JpegInfo, npt.NDArray[np.generic]]]: ...
+def transcode_batch(
+    sources: Sequence[str | os.PathLike],
+    output_dir: str | os.PathLike,
+    *,
+    target_format: str = "jxl",
+    max_workers: int | None = None,
+) -> list[str]: ...
 
 __version__: str

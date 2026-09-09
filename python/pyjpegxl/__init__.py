@@ -80,8 +80,49 @@ from pyjpegxl._pyjpegxl import (
     probe,
     set_num_threads,
 )
+from pyjpegxl._sniff import (
+    PrefixedStream,
+    sniff_bytes,
+    sniff_source,
+    sniff_stream,
+)
+from pyjpegxl._unified import (
+    imread,
+    imwrite,
+    probe_image,
+)
+from pyjpegxl.batch import (
+    read_batch,
+    transcode_batch,
+)
+from pyjpegxl.pillow import (
+    from_pil,
+    to_pil,
+)
+from pyjpegxl.torch import (
+    decode_into_tensor,
+    from_tensor,
+    to_tensor,
+)
 
 __all__ = [
+    # Unified polymorphic I/O & sniffing
+    "imread",
+    "imwrite",
+    "probe_image",
+    "sniff_bytes",
+    "sniff_stream",
+    "sniff_source",
+    "PrefixedStream",
+    # Ecosystem bridges
+    "to_pil",
+    "from_pil",
+    "to_tensor",
+    "from_tensor",
+    "decode_into_tensor",
+    # High-throughput batch operations
+    "read_batch",
+    "transcode_batch",
     # JXL — fast metadata probing
     "probe",
     "probe_file",

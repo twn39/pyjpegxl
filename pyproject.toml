@@ -15,6 +15,14 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.20.0",
 ]
+
+[project.optional-dependencies]
+pillow = ["pillow>=9.0.0"]
+torch = ["torch>=1.13.0"]
+all = ["pyjpegxl[pillow,torch]"]
+
+[project.entry-points."pillow.plugin"]
+jxl = "pyjpegxl.pillow:register"
 keywords = ["jpegxl", "jxl", "jpeg", "image", "encoding", "decoding", "numpy", "zero-copy", "transcoding"]
 classifiers = [
     "Development Status :: 4 - Beta",
