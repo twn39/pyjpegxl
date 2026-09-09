@@ -67,8 +67,10 @@ exclude_lines = [
     "raise NotImplementedError",
     "pass",
     "except ImportError:",
+    "if TYPE_CHECKING:",
 ]
 show_missing = true
+fail_under = 95
 
 [tool.ruff]
 line-length = 120

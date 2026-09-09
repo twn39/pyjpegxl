@@ -917,3 +917,111 @@ class TestStabilityAndSafety:
             meta, dec = pyjpegxl.decode_to_numpy(jxl)
             assert meta.width == 64
         pyjpegxl.set_num_threads(0)  # reset to auto
+
+
+class TestAsyncCoverageCompleteness:
+    """Ensure complete 100% test coverage across all async API functions."""
+
+    @pytest.mark.asyncio
+    async def test_async_jxl_file_read_write(self, real_image_data, tmp_path):
+        _, rgb_arr, _ = real_image_data
+        h, w, c = rgb_arr.shape
+        raw_bytes = rgb_arr.tobytes()
+
+        # 1. async_write
+        dest = tmp_path / "async_written.jxl"
+        bytes_written = await pyjpegxl.async_write(
+            dest,
+            raw_bytes,
+            w,
+            h,
+            lossless=True,
+            num_channels=c,
+            speed=pyjpegxl.EncoderSpeed.Lightning,
+        )
+        assert bytes_written > 0
+        assert dest.exists()
+
+        # 2. async_read
+        meta, read_bytes = await pyjpegxl.async_read(dest)
+        assert meta.width == w
+        assert meta.height == h
+        assert read_bytes == raw_bytes
+
+        # 3. async_read with explicit dtype
+        meta_u8, read_bytes_u8 = await pyjpegxl.async_read(dest, dtype="uint8")
+        assert meta_u8.width == w
+        assert read_bytes_u8 == raw_bytes
+
+    @pytest.mark.asyncio
+    async def test_async_jpeg_bytes_codec(self, real_image_data):
+        _, rgb_arr, _ = real_image_data
+        h, w, c = rgb_arr.shape
+        raw_bytes = rgb_arr.tobytes()
+
+        # 1. async_jpeg_encode
+        jpeg_bytes = await pyjpegxl.async_jpeg_encode(
+            raw_bytes,
+            w,
+            h,
+            quality=90,
+            num_channels=c,
+        )
+        assert len(jpeg_bytes) > 0
+
+        # 2. async_jpeg_decode
+        info, decoded_bytes = await pyjpegxl.async_jpeg_decode(jpeg_bytes, channels=3)
+        assert info.width == w
+        assert info.height == h
+        assert info.num_channels == 3
+        assert len(decoded_bytes) == len(raw_bytes)
+
+    @pytest.mark.asyncio
+    async def test_async_jpeg_numpy_codec(self, real_image_data):
+        _, rgb_arr, _ = real_image_data
+        # 1. async_jpeg_encode_from_numpy
+        jpeg_bytes = await pyjpegxl.async_jpeg_encode_from_numpy(rgb_arr, quality=90)
+        assert len(jpeg_bytes) > 0
+
+        # 2. async_jpeg_decode_to_numpy
+        info, decoded_arr = await pyjpegxl.async_jpeg_decode_to_numpy(jpeg_bytes, channels=3)
+        assert info.width == rgb_arr.shape[1]
+        assert info.height == rgb_arr.shape[0]
+        assert decoded_arr.shape == rgb_arr.shape
+        assert decoded_arr.dtype == np.uint8
+
+    @pytest.mark.asyncio
+    async def test_async_jpeg_file_io(self, real_image_data, tmp_path):
+        _, rgb_arr, _ = real_image_data
+        h, w, c = rgb_arr.shape
+        raw_bytes = rgb_arr.tobytes()
+        dest = tmp_path / "async_jpeg_io.jpg"
+
+        # 1. async_jpeg_write
+        written = await pyjpegxl.async_jpeg_write(dest, raw_bytes, w, h, quality=90, num_channels=c)
+        assert written > 0
+        assert dest.exists()
+
+        # 2. async_jpeg_read
+        info, read_bytes = await pyjpegxl.async_jpeg_read(dest, channels=3)
+        assert info.width == w
+        assert info.height == h
+        assert len(read_bytes) == len(raw_bytes)
+
+    def test_version_fallback_branch(self, monkeypatch):
+        import importlib
+        import importlib.metadata
+
+        def mock_version(name):
+            raise importlib.metadata.PackageNotFoundError
+
+        monkeypatch.setattr(importlib.metadata, "version", mock_version)
+
+        import pyjpegxl
+
+        importlib.reload(pyjpegxl)
+        assert isinstance(pyjpegxl.__version__, str)
+        assert len(pyjpegxl.__version__) > 0
+        # restore normal state
+        monkeypatch.undo()
+        importlib.reload(pyjpegxl)
