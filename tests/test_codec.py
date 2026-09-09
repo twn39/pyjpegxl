@@ -124,7 +124,7 @@ class TestBytesAPI:
         assert meta.xmp == fake_xmp
 
     def test_version(self):
-        assert pyjpegxl.__version__ == "0.2.2"
+        assert pyjpegxl.__version__ == "0.3.0"
 
     def test_large_metadata_roundtrip(self, real_image_data):
         """Test EXIF/XMP larger than 64KB to verify dynamic buffer expansion."""
