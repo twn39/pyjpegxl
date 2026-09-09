@@ -54,11 +54,11 @@ jobs:
 
       - name: Run Pytest (Unix)
         if: runner.os != 'Windows'
-        run: uv run pytest --cov=pyjpegxl --cov-report=xml --cov-fail-under=95 tests/test_codec.py -v -s --timeout=300
+        run: uv run pytest --cov=pyjpegxl --cov-report=xml --cov-fail-under=95 tests/ -v -s --timeout=300
 
       - name: Run Pytest (Windows)
         if: runner.os == 'Windows'
-        run: uv run pytest tests/test_codec.py -v -s --timeout=300 --no-cov
+        run: uv run pytest tests/ -v -s --timeout=300 --no-cov
 
       - name: Upload coverage to Codecov
         if: runner.os != 'Windows'
